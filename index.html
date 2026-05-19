@@ -1,0 +1,1658 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Litigation Intelligence OS — Investor Deck</title>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;0,900;1,400&family=DM+Mono:wght@300;400;500&family=Instrument+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --gold: #C9A84C;
+    --gold-light: #E8C97A;
+    --gold-dim: rgba(201,168,76,0.15);
+    --ink: #0A0A0F;
+    --ink-soft: #12121A;
+    --paper: #F5F0E8;
+    --paper-warm: #EDE8DC;
+    --text-primary: #E8E4DC;
+    --text-muted: #8A8070;
+    --text-dim: #504840;
+    --accent-red: #C0392B;
+    --accent-teal: #1A7A6E;
+    --border: rgba(201,168,76,0.2);
+  }
+
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--ink);
+    color: var(--text-primary);
+    font-family: 'Instrument Sans', sans-serif;
+    font-weight: 300;
+    overflow-x: hidden;
+  }
+
+  /* ─── NOISE OVERLAY ─── */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 1000;
+    opacity: 0.4;
+  }
+
+  /* ─── SCROLLBAR ─── */
+  ::-webkit-scrollbar { width: 3px; }
+  ::-webkit-scrollbar-track { background: var(--ink); }
+  ::-webkit-scrollbar-thumb { background: var(--gold); }
+
+  /* ─── NAV ─── */
+  nav {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    z-index: 999;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1.5rem 4rem;
+    border-bottom: 1px solid transparent;
+    transition: all 0.4s ease;
+    backdrop-filter: blur(0px);
+  }
+
+  nav.scrolled {
+    border-bottom-color: var(--border);
+    backdrop-filter: blur(20px);
+    background: rgba(10,10,15,0.85);
+  }
+
+  .nav-logo {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.75rem;
+    letter-spacing: 0.25em;
+    color: var(--gold);
+    text-transform: uppercase;
+  }
+
+  .nav-links {
+    display: flex;
+    gap: 2.5rem;
+    list-style: none;
+  }
+
+  .nav-links a {
+    font-size: 0.8rem;
+    letter-spacing: 0.1em;
+    color: var(--text-muted);
+    text-decoration: none;
+    text-transform: uppercase;
+    transition: color 0.3s;
+  }
+
+  .nav-links a:hover { color: var(--gold); }
+
+  .nav-cta {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.75rem;
+    letter-spacing: 0.15em;
+    color: var(--ink);
+    background: var(--gold);
+    padding: 0.6rem 1.4rem;
+    text-decoration: none;
+    text-transform: uppercase;
+    transition: all 0.3s;
+  }
+
+  .nav-cta:hover { background: var(--gold-light); }
+
+  /* ─── HERO ─── */
+  .hero {
+    min-height: 100vh;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .hero-left {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 8rem 4rem 6rem 6rem;
+    position: relative;
+    z-index: 2;
+  }
+
+  .hero-right {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .hero-eyebrow {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 2.5rem;
+    opacity: 0;
+    animation: fadeUp 0.8s ease 0.2s forwards;
+  }
+
+  .hero-eyebrow::before {
+    content: '';
+    width: 2rem;
+    height: 1px;
+    background: var(--gold);
+  }
+
+  .hero-eyebrow span {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.3em;
+    color: var(--gold);
+    text-transform: uppercase;
+  }
+
+  .hero-headline {
+    font-family: 'Playfair Display', serif;
+    font-size: clamp(3rem, 5vw, 4.5rem);
+    font-weight: 900;
+    line-height: 1.05;
+    margin-bottom: 2rem;
+    opacity: 0;
+    animation: fadeUp 0.8s ease 0.4s forwards;
+  }
+
+  .hero-headline em {
+    font-style: italic;
+    color: var(--gold);
+  }
+
+  .hero-sub {
+    font-size: 1rem;
+    line-height: 1.8;
+    color: var(--text-muted);
+    max-width: 480px;
+    margin-bottom: 3rem;
+    opacity: 0;
+    animation: fadeUp 0.8s ease 0.6s forwards;
+  }
+
+  .hero-actions {
+    display: flex;
+    gap: 1.5rem;
+    align-items: center;
+    opacity: 0;
+    animation: fadeUp 0.8s ease 0.8s forwards;
+  }
+
+  .btn-primary {
+    background: var(--gold);
+    color: var(--ink);
+    padding: 1rem 2.4rem;
+    font-family: 'DM Mono', monospace;
+    font-size: 0.8rem;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    text-decoration: none;
+    border: none;
+    cursor: pointer;
+    transition: all 0.3s;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .btn-primary::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: var(--gold-light);
+    transform: translateX(-100%);
+    transition: transform 0.3s ease;
+  }
+
+  .btn-primary:hover::after { transform: translateX(0); }
+  .btn-primary span { position: relative; z-index: 1; }
+
+  .btn-ghost {
+    color: var(--text-muted);
+    font-family: 'DM Mono', monospace;
+    font-size: 0.8rem;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    text-decoration: none;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    transition: color 0.3s;
+  }
+
+  .btn-ghost:hover { color: var(--gold); }
+  .btn-ghost::after { content: '→'; }
+
+  /* ─── HERO VISUAL ─── */
+  .hero-visual {
+    width: 100%;
+    height: 100%;
+    position: absolute;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .scales-container {
+    position: relative;
+    width: 420px;
+    height: 420px;
+    opacity: 0;
+    animation: fadeIn 1.2s ease 0.6s forwards;
+  }
+
+  .scales-base {
+    position: absolute;
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 4px;
+    height: 200px;
+    background: linear-gradient(to top, var(--gold), transparent);
+  }
+
+  .scales-beam {
+    position: absolute;
+    top: 80px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 260px;
+    height: 2px;
+    background: var(--gold);
+    animation: tilt 4s ease-in-out infinite;
+    transform-origin: center;
+  }
+
+  .scale-pan {
+    position: absolute;
+    top: 0;
+    width: 80px;
+    height: 80px;
+    border: 1px solid var(--gold);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'DM Mono', monospace;
+    font-size: 0.6rem;
+    letter-spacing: 0.1em;
+    color: var(--gold);
+    text-align: center;
+    background: rgba(201,168,76,0.05);
+  }
+
+  .scale-pan-left { left: -40px; transform: translateY(10px) rotate(2deg); }
+  .scale-pan-right { right: -40px; transform: translateY(-10px) rotate(-2deg); }
+
+  .scale-chain {
+    position: absolute;
+    top: -40px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 1px;
+    height: 40px;
+    background: var(--gold-light);
+  }
+
+  @keyframes tilt {
+    0%, 100% { transform: translateX(-50%) rotate(-3deg); }
+    50% { transform: translateX(-50%) rotate(3deg); }
+  }
+
+  /* ─── CIRCUIT GRID BG ─── */
+  .hero::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image:
+      linear-gradient(var(--border) 1px, transparent 1px),
+      linear-gradient(90deg, var(--border) 1px, transparent 1px);
+    background-size: 60px 60px;
+    mask-image: radial-gradient(ellipse 60% 60% at 70% 50%, black 30%, transparent 100%);
+    pointer-events: none;
+  }
+
+  /* glow orb */
+  .hero-right::before {
+    content: '';
+    position: absolute;
+    width: 500px;
+    height: 500px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(201,168,76,0.12) 0%, transparent 70%);
+    pointer-events: none;
+  }
+
+  /* ─── STAT BAR ─── */
+  .stat-bar {
+    background: var(--ink-soft);
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    padding: 2.5rem 6rem;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 2rem;
+  }
+
+  .stat-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    padding: 0 2rem;
+    border-right: 1px solid var(--border);
+  }
+
+  .stat-item:last-child { border-right: none; }
+
+  .stat-number {
+    font-family: 'Playfair Display', serif;
+    font-size: 2.2rem;
+    font-weight: 700;
+    color: var(--gold);
+    line-height: 1;
+  }
+
+  .stat-label {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.65rem;
+    letter-spacing: 0.2em;
+    color: var(--text-muted);
+    text-transform: uppercase;
+  }
+
+  /* ─── SECTION BASE ─── */
+  section {
+    padding: 7rem 6rem;
+    position: relative;
+  }
+
+  .section-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.75rem;
+    font-family: 'DM Mono', monospace;
+    font-size: 0.65rem;
+    letter-spacing: 0.3em;
+    color: var(--gold);
+    text-transform: uppercase;
+    margin-bottom: 1.5rem;
+  }
+
+  .section-tag::before {
+    content: '▸';
+    font-size: 0.5rem;
+  }
+
+  .section-title {
+    font-family: 'Playfair Display', serif;
+    font-size: clamp(2rem, 4vw, 3rem);
+    font-weight: 700;
+    line-height: 1.15;
+    margin-bottom: 1.5rem;
+  }
+
+  .section-title em { font-style: italic; color: var(--gold); }
+
+  .section-lead {
+    font-size: 1rem;
+    line-height: 1.9;
+    color: var(--text-muted);
+    max-width: 600px;
+  }
+
+  /* ─── PROBLEM SECTION ─── */
+  .problem-section {
+    background: var(--ink-soft);
+  }
+
+  .problem-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4rem;
+    margin-top: 5rem;
+    align-items: center;
+  }
+
+  .problem-stats {
+    display: flex;
+    flex-direction: column;
+    gap: 2rem;
+  }
+
+  .problem-stat {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 1.5rem;
+    align-items: start;
+    padding: 2rem;
+    border: 1px solid var(--border);
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.3s;
+  }
+
+  .problem-stat:hover { border-color: var(--gold); }
+
+  .problem-stat::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 3px;
+    background: var(--gold);
+  }
+
+  .problem-stat-num {
+    font-family: 'Playfair Display', serif;
+    font-size: 2.8rem;
+    font-weight: 900;
+    color: var(--gold);
+    line-height: 1;
+  }
+
+  .problem-stat-text {
+    font-size: 0.9rem;
+    line-height: 1.7;
+    color: var(--text-muted);
+    padding-top: 0.5rem;
+  }
+
+  .problem-visual {
+    position: relative;
+    height: 380px;
+  }
+
+  .timeline {
+    position: absolute;
+    left: 30px;
+    top: 0; bottom: 0;
+    width: 2px;
+    background: linear-gradient(to bottom, var(--gold), transparent);
+  }
+
+  .timeline-item {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    margin-bottom: 2rem;
+    padding-left: 2.5rem;
+    position: relative;
+  }
+
+  .timeline-dot {
+    position: absolute;
+    left: -6px;
+    width: 14px;
+    height: 14px;
+    border: 2px solid var(--gold);
+    background: var(--ink-soft);
+    transform: rotate(45deg);
+  }
+
+  .timeline-label {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.65rem;
+    letter-spacing: 0.15em;
+    color: var(--text-muted);
+    text-transform: uppercase;
+  }
+
+  .timeline-value {
+    font-family: 'Playfair Display', serif;
+    font-size: 1.4rem;
+    color: var(--text-primary);
+  }
+
+  .timeline-item.highlight .timeline-value { color: var(--gold); }
+
+  /* ─── SOLUTION / ARCHITECTURE ─── */
+  .arch-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1.5px;
+    margin-top: 4rem;
+    background: var(--border);
+  }
+
+  .arch-card {
+    background: var(--ink);
+    padding: 3rem;
+    position: relative;
+    overflow: hidden;
+    transition: background 0.4s;
+    cursor: default;
+  }
+
+  .arch-card:hover { background: var(--ink-soft); }
+
+  .arch-card::after {
+    content: '';
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    height: 2px;
+    background: var(--gold);
+    transform: scaleX(0);
+    transform-origin: left;
+    transition: transform 0.4s ease;
+  }
+
+  .arch-card:hover::after { transform: scaleX(1); }
+
+  .arch-num {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.65rem;
+    letter-spacing: 0.3em;
+    color: var(--text-dim);
+    margin-bottom: 1.5rem;
+  }
+
+  .arch-icon {
+    font-size: 1.8rem;
+    margin-bottom: 1.2rem;
+  }
+
+  .arch-title {
+    font-family: 'Playfair Display', serif;
+    font-size: 1.3rem;
+    font-weight: 700;
+    margin-bottom: 0.8rem;
+  }
+
+  .arch-desc {
+    font-size: 0.85rem;
+    line-height: 1.8;
+    color: var(--text-muted);
+  }
+
+  .arch-tech {
+    margin-top: 1.5rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .tech-tag {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.6rem;
+    letter-spacing: 0.1em;
+    color: var(--gold);
+    border: 1px solid var(--border);
+    padding: 0.3rem 0.7rem;
+    text-transform: uppercase;
+  }
+
+  /* ─── PILLARS ─── */
+  .pillars-section {
+    background: var(--ink-soft);
+  }
+
+  .pillars-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 2rem;
+    margin-top: 4rem;
+  }
+
+  .pillar-card {
+    border: 1px solid var(--border);
+    padding: 3rem 2.5rem;
+    position: relative;
+    transition: all 0.4s;
+  }
+
+  .pillar-card:hover {
+    border-color: var(--gold);
+    transform: translateY(-4px);
+  }
+
+  .pillar-num {
+    font-family: 'Playfair Display', serif;
+    font-size: 4rem;
+    font-weight: 900;
+    color: var(--border);
+    line-height: 1;
+    margin-bottom: 1.5rem;
+    transition: color 0.4s;
+  }
+
+  .pillar-card:hover .pillar-num { color: var(--gold-dim); }
+
+  .pillar-title {
+    font-family: 'Playfair Display', serif;
+    font-size: 1.4rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .pillar-subtitle {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.65rem;
+    letter-spacing: 0.2em;
+    color: var(--gold);
+    text-transform: uppercase;
+    margin-bottom: 1.5rem;
+  }
+
+  .pillar-desc {
+    font-size: 0.85rem;
+    line-height: 1.8;
+    color: var(--text-muted);
+  }
+
+  /* ─── MARKET ─── */
+  .market-grid {
+    display: grid;
+    grid-template-columns: 1fr 1.5fr;
+    gap: 5rem;
+    margin-top: 4rem;
+    align-items: center;
+  }
+
+  .market-circles {
+    position: relative;
+    height: 340px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .circle-tam {
+    position: absolute;
+    width: 320px;
+    height: 320px;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    display: flex;
+    align-items: flex-start;
+    justify-content: flex-start;
+    padding: 1.5rem;
+    background: rgba(201,168,76,0.03);
+  }
+
+  .circle-sam {
+    position: absolute;
+    width: 210px;
+    height: 210px;
+    border-radius: 50%;
+    border: 1px solid rgba(201,168,76,0.4);
+    background: rgba(201,168,76,0.06);
+    display: flex;
+    align-items: flex-start;
+    justify-content: flex-start;
+    padding: 1.2rem;
+  }
+
+  .circle-som {
+    position: absolute;
+    width: 110px;
+    height: 110px;
+    border-radius: 50%;
+    border: 1px solid var(--gold);
+    background: rgba(201,168,76,0.15);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    text-align: center;
+  }
+
+  .circle-label {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.55rem;
+    letter-spacing: 0.15em;
+    color: var(--gold);
+    text-transform: uppercase;
+  }
+
+  .circle-value {
+    font-family: 'Playfair Display', serif;
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-top: 0.2rem;
+  }
+
+  .market-breakdown {
+    display: flex;
+    flex-direction: column;
+    gap: 2rem;
+  }
+
+  .market-row {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 1rem;
+    align-items: center;
+  }
+
+  .market-row-label {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.65rem;
+    letter-spacing: 0.15em;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    width: 80px;
+  }
+
+  .market-bar-track {
+    height: 2px;
+    background: var(--border);
+    position: relative;
+  }
+
+  .market-bar-fill {
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    background: var(--gold);
+    transition: width 1s ease;
+  }
+
+  .market-row-value {
+    font-family: 'Playfair Display', serif;
+    font-size: 1.1rem;
+    color: var(--gold);
+    white-space: nowrap;
+  }
+
+  /* ─── WORKFLOW ─── */
+  .workflow-section { background: var(--ink-soft); }
+
+  .workflow-steps {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0;
+    margin-top: 4rem;
+    position: relative;
+  }
+
+  .workflow-steps::before {
+    content: '';
+    position: absolute;
+    top: 40px;
+    left: 10%;
+    right: 10%;
+    height: 1px;
+    background: linear-gradient(to right, transparent, var(--gold), transparent);
+    z-index: 0;
+  }
+
+  .workflow-step {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    padding: 0 1.5rem;
+    position: relative;
+    z-index: 1;
+  }
+
+  .step-num {
+    width: 80px;
+    height: 80px;
+    border: 1px solid var(--gold);
+    background: var(--ink-soft);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Playfair Display', serif;
+    font-size: 1.8rem;
+    font-weight: 700;
+    color: var(--gold);
+    margin-bottom: 1.5rem;
+    position: relative;
+  }
+
+  .step-num::before {
+    content: '';
+    position: absolute;
+    inset: 4px;
+    border: 1px solid rgba(201,168,76,0.2);
+  }
+
+  .step-title {
+    font-family: 'Instrument Sans', sans-serif;
+    font-size: 0.9rem;
+    font-weight: 600;
+    margin-bottom: 0.75rem;
+  }
+
+  .step-desc {
+    font-size: 0.78rem;
+    line-height: 1.7;
+    color: var(--text-muted);
+  }
+
+  /* ─── TECH STACK ─── */
+  .stack-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 3rem;
+  }
+
+  .stack-table th {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.65rem;
+    letter-spacing: 0.25em;
+    color: var(--gold);
+    text-transform: uppercase;
+    text-align: left;
+    padding: 1rem 1.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .stack-table td {
+    padding: 1.2rem 1.5rem;
+    font-size: 0.85rem;
+    border-bottom: 1px solid rgba(201,168,76,0.06);
+    vertical-align: middle;
+  }
+
+  .stack-table tr:hover td { background: rgba(201,168,76,0.03); }
+
+  .stack-table td:first-child {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    letter-spacing: 0.1em;
+  }
+
+  .stack-table td:last-child { color: var(--text-muted); font-size: 0.8rem; }
+
+  /* ─── QNA ─── */
+  .qna-section { background: var(--ink-soft); }
+
+  .qna-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    margin-top: 3rem;
+    border: 1px solid var(--border);
+  }
+
+  .qna-item {
+    padding: 0;
+    border-bottom: 1px solid var(--border);
+    overflow: hidden;
+  }
+
+  .qna-item:last-child { border-bottom: none; }
+
+  .qna-q {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 1.5rem 2rem;
+    cursor: pointer;
+    transition: background 0.3s;
+  }
+
+  .qna-q:hover { background: rgba(201,168,76,0.04); }
+
+  .qna-q-mark {
+    font-family: 'Playfair Display', serif;
+    font-size: 1.2rem;
+    color: var(--gold);
+    flex-shrink: 0;
+  }
+
+  .qna-q-text {
+    font-size: 0.9rem;
+    font-weight: 500;
+    flex: 1;
+  }
+
+  .qna-arrow {
+    color: var(--text-dim);
+    transition: transform 0.3s;
+    font-size: 0.8rem;
+  }
+
+  .qna-item.open .qna-arrow { transform: rotate(90deg); color: var(--gold); }
+
+  .qna-a {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.4s ease;
+  }
+
+  .qna-item.open .qna-a { max-height: 200px; }
+
+  .qna-a-inner {
+    padding: 0 2rem 1.5rem 3.8rem;
+    font-size: 0.85rem;
+    line-height: 1.8;
+    color: var(--text-muted);
+    border-left: 2px solid var(--gold-dim);
+    margin: 0 2rem 1.5rem 2rem;
+  }
+
+  /* ─── CTA ─── */
+  .cta-section {
+    text-align: center;
+    padding: 8rem 6rem;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .cta-section::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 600px;
+    height: 600px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(201,168,76,0.08) 0%, transparent 70%);
+    pointer-events: none;
+  }
+
+  .cta-headline {
+    font-family: 'Playfair Display', serif;
+    font-size: clamp(2.5rem, 5vw, 4rem);
+    font-weight: 900;
+    margin-bottom: 1.5rem;
+    line-height: 1.1;
+  }
+
+  .cta-sub {
+    font-size: 1rem;
+    color: var(--text-muted);
+    margin-bottom: 3rem;
+    line-height: 1.7;
+  }
+
+  .cta-actions {
+    display: flex;
+    gap: 1.5rem;
+    justify-content: center;
+    align-items: center;
+  }
+
+  /* ─── FOOTER ─── */
+  footer {
+    border-top: 1px solid var(--border);
+    padding: 2rem 6rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  footer .logo {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.25em;
+    color: var(--gold);
+    text-transform: uppercase;
+  }
+
+  footer .copy {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.65rem;
+    color: var(--text-dim);
+    letter-spacing: 0.1em;
+  }
+
+  /* ─── ANIMATIONS ─── */
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(30px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  .reveal {
+    opacity: 0;
+    transform: translateY(40px);
+    transition: opacity 0.7s ease, transform 0.7s ease;
+  }
+
+  .reveal.visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  /* ─── DIVIDER ─── */
+  .gold-rule {
+    width: 60px;
+    height: 2px;
+    background: var(--gold);
+    margin: 2rem 0;
+  }
+
+  /* ─── CONFIDENCE CARD ─── */
+  .confidence-card {
+    background: var(--ink-soft);
+    border: 1px solid var(--border);
+    padding: 2rem;
+    margin-top: 3rem;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 2rem;
+    align-items: center;
+  }
+
+  .confidence-label {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.65rem;
+    letter-spacing: 0.25em;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    margin-bottom: 0.75rem;
+  }
+
+  .confidence-bar-track {
+    height: 4px;
+    background: var(--border);
+    border-radius: 2px;
+    margin-top: 0.5rem;
+  }
+
+  .confidence-bar-fill {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(to right, var(--gold), var(--gold-light));
+    border-radius: 2px;
+    transition: width 2s ease;
+  }
+
+  .confidence-score {
+    font-family: 'Playfair Display', serif;
+    font-size: 3rem;
+    font-weight: 900;
+    color: var(--gold);
+    line-height: 1;
+  }
+
+  .confidence-unit {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.65rem;
+    color: var(--text-muted);
+    letter-spacing: 0.1em;
+  }
+
+  /* responsive */
+  @media (max-width: 1024px) {
+    nav { padding: 1.5rem 2rem; }
+    nav ul { display: none; }
+    .hero { grid-template-columns: 1fr; }
+    .hero-right { display: none; }
+    .hero-left { padding: 8rem 3rem 4rem; }
+    section { padding: 5rem 3rem; }
+    .stat-bar { grid-template-columns: repeat(2, 1fr); padding: 2rem 3rem; }
+    .arch-grid { grid-template-columns: 1fr; }
+    .pillars-grid { grid-template-columns: 1fr; }
+    .market-grid { grid-template-columns: 1fr; }
+    .workflow-steps { grid-template-columns: 1fr 1fr; }
+    footer { padding: 2rem 3rem; }
+    .problem-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ─── NAV ─── -->
+<nav id="nav">
+  <div class="nav-logo">Litigation Intelligence OS</div>
+  <ul class="nav-links">
+    <li><a href="#problem">Problem</a></li>
+    <li><a href="#solution">Solution</a></li>
+    <li><a href="#market">Market</a></li>
+    <li><a href="#moat">Moat</a></li>
+    <li><a href="#contact">Contact</a></li>
+  </ul>
+  <a href="#contact" class="nav-cta">Request Demo</a>
+</nav>
+
+<!-- ─── HERO ─── -->
+<section class="hero">
+  <div class="hero-left">
+    <div class="hero-eyebrow">
+      <span>Series A · Indian Legal-Tech</span>
+    </div>
+    <h1 class="hero-headline">
+      The <em>Digitized Brain</em> of India's Tax Courts
+    </h1>
+    <p class="hero-sub">
+      Litigation Intelligence OS is a zero-hallucination AI engine for Indian Income Tax litigation — grounded in 12,000+ ITAT decisions, predicting outcomes with 82% accuracy, and generating complete legal strategies in under 2 minutes.
+    </p>
+    <div class="hero-actions">
+      <a href="#solution" class="btn-primary"><span>Explore the Technology</span></a>
+      <a href="#contact" class="btn-ghost">Schedule a Demo</a>
+    </div>
+  </div>
+  <div class="hero-right">
+    <div class="hero-visual">
+      <div class="scales-container">
+        <div class="scales-base"></div>
+        <div class="scales-beam">
+          <div class="scale-pan scale-pan-left">
+            <div class="scale-chain"></div>
+            <span>Human<br>Research</span>
+          </div>
+          <div class="scale-pan scale-pan-right">
+            <div class="scale-chain"></div>
+            <span>AI<br>Verdict</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─── STAT BAR ─── -->
+<div class="stat-bar">
+  <div class="stat-item">
+    <div class="stat-number">12,000+</div>
+    <div class="stat-label">ITAT Decisions Indexed</div>
+  </div>
+  <div class="stat-item">
+    <div class="stat-number">82%</div>
+    <div class="stat-label">Outcome Prediction Accuracy</div>
+  </div>
+  <div class="stat-item">
+    <div class="stat-number">&lt; 2 min</div>
+    <div class="stat-label">Full Strategy Generation</div>
+  </div>
+  <div class="stat-item">
+    <div class="stat-number">18.5L+</div>
+    <div class="stat-label">Addressable Professionals</div>
+  </div>
+</div>
+
+<!-- ─── PROBLEM ─── -->
+<section id="problem" class="problem-section">
+  <div class="section-tag">The Problem</div>
+  <h2 class="section-title">India's Tax Litigation <em>Crisis</em></h2>
+  <p class="section-lead">
+    50 million pending cases. A research bottleneck costing thousands of hours per firm per year. And a system where outcomes are determined by obscure precedents that no human can reliably surface in time.
+  </p>
+
+  <div class="problem-grid">
+    <div class="problem-stats">
+      <div class="problem-stat reveal">
+        <div class="problem-stat-num">5Cr+</div>
+        <div class="problem-stat-text">Legal cases pending in India — tax litigation is among the most research-intensive, with outcome patterns buried in decades of judgments.</div>
+      </div>
+      <div class="problem-stat reveal">
+        <div class="problem-stat-num">40–60h</div>
+        <div class="problem-stat-text">Hours a senior CA or lawyer spends manually researching precedents for a single complex case — at professional billing rates, this is enormously expensive.</div>
+      </div>
+      <div class="problem-stat reveal">
+        <div class="problem-stat-num">90%</div>
+        <div class="problem-stat-text">Of case outcomes are pattern-dependent — they hinge on historical decisions that generic AI models hallucinate, misquote, or miss entirely.</div>
+      </div>
+    </div>
+
+    <div class="problem-visual reveal">
+      <div class="timeline" style="left:0"></div>
+      <div style="padding-left:2.5rem">
+        <div class="timeline-item">
+          <div class="timeline-dot"></div>
+          <div>
+            <div class="timeline-label">Day 1</div>
+            <div class="timeline-value">Case intake & first read</div>
+          </div>
+        </div>
+        <div class="timeline-item">
+          <div class="timeline-dot"></div>
+          <div>
+            <div class="timeline-label">Day 3–5</div>
+            <div class="timeline-value">Manual precedent search</div>
+          </div>
+        </div>
+        <div class="timeline-item">
+          <div class="timeline-dot"></div>
+          <div>
+            <div class="timeline-label">Day 7–10</div>
+            <div class="timeline-value">Strategy draft prepared</div>
+          </div>
+        </div>
+        <div class="timeline-item highlight">
+          <div class="timeline-dot"></div>
+          <div>
+            <div class="timeline-label">With LIOS</div>
+            <div class="timeline-value">Complete. Under 2 minutes.</div>
+          </div>
+        </div>
+        <div style="margin-top:2rem; padding:1.5rem; border:1px solid var(--border);">
+          <div class="confidence-label">AI Confidence Score — Live Preview</div>
+          <div style="display:flex;align-items:center;gap:1rem;margin-top:0.5rem">
+            <div style="flex:1">
+              <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.4rem">Predicted Outcome: <span style="color:var(--accent-teal);font-weight:600">ALLOWED</span></div>
+              <div class="confidence-bar-track">
+                <div class="confidence-bar-fill" id="confBar" style="width:82%"></div>
+              </div>
+            </div>
+            <div>
+              <div class="confidence-score" id="confNum">82</div>
+              <div class="confidence-unit">% Confidence</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─── SOLUTION / ARCHITECTURE ─── -->
+<section id="solution">
+  <div class="section-tag">The Architecture</div>
+  <h2 class="section-title">Four Layers of <em>Legal Intelligence</em></h2>
+  <p class="section-lead">
+    A precision-engineered hybrid AI stack that combines the depth of statistical machine learning with the reasoning power of modern large language models — all running entirely on-premise.
+  </p>
+
+  <div class="arch-grid reveal">
+    <div class="arch-card">
+      <div class="arch-num">01 / INTAKE ENGINE</div>
+      <div class="arch-icon">⚖</div>
+      <div class="arch-title">Adaptive Discovery</div>
+      <div class="arch-desc">Acts as a Senior Counsel — not a chatbot. If your case description is vague, the system uses an embedded LLM to ask exactly what's missing. It detects issue type (Section 269T, 40A(3), etc.) and switches logic accordingly.</div>
+      <div class="arch-tech">
+        <span class="tech-tag">Ollama / phi3:mini</span>
+        <span class="tech-tag">Contextual NLU</span>
+        <span class="tech-tag">Streamlit UI</span>
+      </div>
+    </div>
+
+    <div class="arch-card">
+      <div class="arch-num">02 / INTELLIGENCE CORE</div>
+      <div class="arch-icon">◈</div>
+      <div class="arch-title">Hybrid ML Engine</div>
+      <div class="arch-desc">TF-IDF + Logistic Regression for fast legal issue tagging. MiniLM-L6 sentence embeddings to match your fact pattern by semantic similarity. Random Forest outcome predictor trained on 12,000 real ITAT verdicts.</div>
+      <div class="arch-tech">
+        <span class="tech-tag">MiniLM-L6</span>
+        <span class="tech-tag">Random Forest</span>
+        <span class="tech-tag">TF-IDF</span>
+        <span class="tech-tag">BERTopic</span>
+      </div>
+    </div>
+
+    <div class="arch-card">
+      <div class="arch-num">03 / RETRIEVAL SYSTEM</div>
+      <div class="arch-icon">◉</div>
+      <div class="arch-title">Vector Search at Scale</div>
+      <div class="arch-desc">FAISS-powered vector database enables lightning-fast similarity search across 12,000+ judgments. Retrieves the exact "Key Ratio" — the judicial logic used in comparable cases — in milliseconds. Drift-resistance ensures recent precedents carry greater weight.</div>
+      <div class="arch-tech">
+        <span class="tech-tag">FAISS</span>
+        <span class="tech-tag">UMAP</span>
+        <span class="tech-tag">HDBSCAN</span>
+        <span class="tech-tag">Decay Weights</span>
+      </div>
+    </div>
+
+    <div class="arch-card">
+      <div class="arch-num">04 / STRATEGY SYNTHESIS</div>
+      <div class="arch-icon">▣</div>
+      <div class="arch-title">Grounded Brief Generator</div>
+      <div class="arch-desc">Feeds retrieved legal data and identified facts into a local LLM with a high-precision prompt. Outputs a complete defense strategy: precedent citations, adversary attack points, merit win % vs. technical relief %, and a downloadable PDF brief.</div>
+      <div class="arch-tech">
+        <span class="tech-tag">llama3 / phi3</span>
+        <span class="tech-tag">RAG Pipeline</span>
+        <span class="tech-tag">PDF Export</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─── MOAT / THREE PILLARS ─── -->
+<section id="moat" class="pillars-section">
+  <div class="section-tag">Competitive Moat</div>
+  <h2 class="section-title">Why This Cannot <em>Be Copied</em></h2>
+  <p class="section-lead">
+    Three interlocking advantages that compound over time — proprietary data, architectural depth, and a privacy model that opens doors to high-value clients.
+  </p>
+
+  <div class="pillars-grid">
+    <div class="pillar-card reveal">
+      <div class="pillar-num">01</div>
+      <div class="pillar-title">Proprietary Intelligence</div>
+      <div class="pillar-subtitle">The Data Moat</div>
+      <div class="pillar-desc">
+        We are not an API wrapper. Our hybrid architecture combines LLM reasoning with deterministic ML on a proprietary, cleaned dataset of 12,000+ ITAT decisions. An Expert Feedback Loop allows CAs to override the AI — and the system learns from every correction, widening the accuracy gap over time.
+      </div>
+    </div>
+
+    <div class="pillar-card reveal">
+      <div class="pillar-num">02</div>
+      <div class="pillar-title">Local Privacy Architecture</div>
+      <div class="pillar-subtitle">The Trust Moat</div>
+      <div class="pillar-desc">
+        Legal data is privileged. Our system runs entirely on-premise via edge computing (Ollama). No client narrative, no case detail, no confidential strategy ever touches an external cloud server. This is the #1 barrier to AI adoption in legal — and we've solved it by design.
+      </div>
+    </div>
+
+    <div class="pillar-card reveal">
+      <div class="pillar-num">03</div>
+      <div class="pillar-title">Massive Scale Opportunity</div>
+      <div class="pillar-subtitle">The Market Moat</div>
+      <div class="pillar-desc">
+        3.5 Lakh CAs and 15 Lakh lawyers in India represent the immediate addressable market. Saving 10 hours per case for 1% of this base generates a multi-billion dollar efficiency play. The SaaS model (Lite for individuals, Enterprise for firms) enables rapid, low-friction distribution.
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─── MARKET ─── -->
+<section id="market">
+  <div class="section-tag">Market Opportunity</div>
+  <h2 class="section-title">A Multi-Billion Dollar <em>Efficiency Play</em></h2>
+  <p class="section-lead">
+    The Indian legal market is one of the largest and most underserved in the world. Tax litigation is its most research-intensive — and most valuable — segment.
+  </p>
+
+  <div class="market-grid">
+    <div class="market-circles reveal">
+      <div class="circle-tam">
+        <div>
+          <div class="circle-label">TAM</div>
+          <div class="circle-value">All CAs &amp; Lawyers</div>
+        </div>
+      </div>
+      <div class="circle-sam">
+        <div>
+          <div class="circle-label">SAM</div>
+          <div class="circle-value">Tax Litigators</div>
+        </div>
+      </div>
+      <div class="circle-som">
+        <div class="circle-label">SOM</div>
+        <div class="circle-value" style="font-size:0.75rem">Year 1<br>Target</div>
+      </div>
+    </div>
+
+    <div class="market-breakdown reveal">
+      <div>
+        <div class="section-tag" style="margin-bottom:0.5rem">Total Addressable Market</div>
+        <div class="market-row">
+          <div class="market-row-label">CAs</div>
+          <div class="market-bar-track"><div class="market-bar-fill" style="width:100%"></div></div>
+          <div class="market-row-value">3.5 Lakh</div>
+        </div>
+        <div class="market-row" style="margin-top:0.75rem">
+          <div class="market-row-label">Lawyers</div>
+          <div class="market-bar-track"><div class="market-bar-fill" style="width:100%"></div></div>
+          <div class="market-row-value">15 Lakh</div>
+        </div>
+      </div>
+      <div class="gold-rule"></div>
+      <div>
+        <div class="section-tag" style="margin-bottom:1rem">Revenue Model</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
+          <div style="border:1px solid var(--border);padding:1.5rem;">
+            <div style="font-family:'DM Mono',monospace;font-size:0.6rem;letter-spacing:0.2em;color:var(--gold);text-transform:uppercase;margin-bottom:0.5rem">Lite</div>
+            <div style="font-family:'Playfair Display',serif;font-size:1.5rem;font-weight:700;margin-bottom:0.5rem">₹2,999<span style="font-size:0.8rem;font-weight:400;color:var(--text-muted)">/mo</span></div>
+            <div style="font-size:0.78rem;color:var(--text-muted);line-height:1.6">Individual CAs &amp; Lawyers. Unlimited queries, PDF export.</div>
+          </div>
+          <div style="border:1px solid var(--gold);padding:1.5rem;background:var(--gold-dim);">
+            <div style="font-family:'DM Mono',monospace;font-size:0.6rem;letter-spacing:0.2em;color:var(--gold);text-transform:uppercase;margin-bottom:0.5rem">Enterprise</div>
+            <div style="font-family:'Playfair Display',serif;font-size:1.5rem;font-weight:700;margin-bottom:0.5rem">Custom</div>
+            <div style="font-size:0.78rem;color:var(--text-muted);line-height:1.6">Law firms &amp; Big-4. Custom KB integration &amp; training loop.</div>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div style="font-family:'DM Mono',monospace;font-size:0.65rem;letter-spacing:0.15em;color:var(--text-muted);text-transform:uppercase;margin-bottom:0.5rem">1% Penetration = </div>
+        <div style="font-family:'Playfair Display',serif;font-size:2.5rem;font-weight:900;color:var(--gold)">₹540 Cr+</div>
+        <div style="font-size:0.78rem;color:var(--text-dim);margin-top:0.25rem">Annual Recurring Revenue at Lite pricing alone</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─── WORKFLOW ─── -->
+<section class="workflow-section">
+  <div class="section-tag">User Workflow</div>
+  <h2 class="section-title">From Chaos to <em>Courtroom-Ready</em></h2>
+  <p class="section-lead">Four steps. Under two minutes. A complete, citable, data-backed legal strategy.</p>
+
+  <div class="workflow-steps">
+    <div class="workflow-step reveal">
+      <div class="step-num">1</div>
+      <div class="step-title">Narrative Input</div>
+      <div class="step-desc">Paste a raw, unstructured case description. No formatting required. The system reads intent, not format.</div>
+    </div>
+    <div class="workflow-step reveal">
+      <div class="step-num">2</div>
+      <div class="step-title">AI Discovery</div>
+      <div class="step-desc">The LLM asks 3–5 sharp, India-law-aligned follow-up questions to fill any critical gaps in the fact pattern.</div>
+    </div>
+    <div class="workflow-step reveal">
+      <div class="step-num">3</div>
+      <div class="step-title">Outcome Simulation</div>
+      <div class="step-desc">Random Forest scans 12,000 precedents and returns a predicted verdict (ALLOWED/DISMISSED) with a confidence score.</div>
+    </div>
+    <div class="workflow-step reveal">
+      <div class="step-num">4</div>
+      <div class="step-title">Downloadable Brief</div>
+      <div class="step-desc">A complete PDF: defense strategy, 5–10 cited cases, adversary attack points, Merit Win % vs. Technical Relief %.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ─── TECH STACK ─── -->
+<section>
+  <div class="section-tag">Technical Specifications</div>
+  <h2 class="section-title">Built for <em>Production</em></h2>
+  <p class="section-lead">Enterprise-grade components selected for accuracy, privacy, and scalability. No cloud dependencies. No third-party data exposure.</p>
+
+  <table class="stack-table reveal">
+    <thead>
+      <tr>
+        <th>Layer</th>
+        <th>Technology</th>
+        <th>Role</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Language Model</td>
+        <td>Ollama · phi3:mini / llama3</td>
+        <td>Local LLM inference — zero cloud dependency, complete data privacy</td>
+      </tr>
+      <tr>
+        <td>Vector Database</td>
+        <td>FAISS (Facebook AI Similarity Search)</td>
+        <td>Sub-millisecond similarity search across 12,000+ case embeddings</td>
+      </tr>
+      <tr>
+        <td>Embeddings</td>
+        <td>SentenceTransformers · MiniLM-L6</td>
+        <td>Semantic case matching — finds cases with the same fact-pattern "vibe"</td>
+      </tr>
+      <tr>
+        <td>ML Classifier</td>
+        <td>Scikit-learn · Random Forest + TF-IDF</td>
+        <td>Deterministic outcome prediction with calibrated confidence scores</td>
+      </tr>
+      <tr>
+        <td>Topic Modelling</td>
+        <td>BERTopic + HDBSCAN + UMAP</td>
+        <td>Unsupervised discovery of hidden legal trends across case clusters</td>
+      </tr>
+      <tr>
+        <td>Interface</td>
+        <td>Streamlit · Premium Dark UI</td>
+        <td>Glassmorphism dashboard built for professional legal use</td>
+      </tr>
+      <tr>
+        <td>Data Source</td>
+        <td>Proprietary · 12,000+ ITAT Judgments</td>
+        <td>Scraped, cleaned, structured, and tagged with outcome labels</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ─── Q&A ─── -->
+<section class="qna-section" id="qna">
+  <div class="section-tag">Investor Q&amp;A</div>
+  <h2 class="section-title">Questions We <em>Expect</em></h2>
+
+  <div class="qna-list reveal">
+    <div class="qna-item">
+      <div class="qna-q" onclick="toggleQna(this)">
+        <div class="qna-q-mark">Q</div>
+        <div class="qna-q-text">"Why won't OpenAI or a Big-4 firm just build this?"</div>
+        <div class="qna-arrow">▶</div>
+      </div>
+      <div class="qna-a">
+        <div class="qna-a-inner">OpenAI hallucinates on local Indian statutes and has no access to our cleaned, structured ITAT dataset. Big-4 firms have the data but not this specific hybrid architecture combining statistical ML with LLM reasoning. We sit at the intersection of both — a moat that requires years of proprietary data collection and specialized model training to replicate.</div>
+      </div>
+    </div>
+
+    <div class="qna-item">
+      <div class="qna-q" onclick="toggleQna(this)">
+        <div class="qna-q-mark">Q</div>
+        <div class="qna-q-text">"What happens when the law changes?"</div>
+        <div class="qna-arrow">▶</div>
+      </div>
+      <div class="qna-a">
+        <div class="qna-a-inner">Our Drift Resistance system includes a decay_stale_weights function that automatically reduces the influence of older precedents relative to recent judgments. As new ITAT decisions are added to the dataset, the system re-weights the retrieval model. The Expert Feedback Loop further accelerates this: when a CA flags an outdated strategy, that signal propagates through the training pipeline.</div>
+      </div>
+    </div>
+
+    <div class="qna-item">
+      <div class="qna-q" onclick="toggleQna(this)">
+        <div class="qna-q-mark">Q</div>
+        <div class="qna-q-text">"What is the liability model? Can AI give legal advice?"</div>
+        <div class="qna-arrow">▶</div>
+      </div>
+      <div class="qna-a">
+        <div class="qna-a-inner">LIOS is a research and strategy assistance tool — a co-pilot, not a replacement for professional judgment. All outputs are explicitly labelled as AI-generated research for professional review. The licensed CA or Advocate retains all professional responsibility. This is the same model used by legal research platforms like Manupatra and SCC Online, which are widely adopted across India.</div>
+      </div>
+    </div>
+
+    <div class="qna-item">
+      <div class="qna-q" onclick="toggleQna(this)">
+        <div class="qna-q-mark">Q</div>
+        <div class="qna-q-text">"How do you make money and what does unit economics look like?"</div>
+        <div class="qna-arrow">▶</div>
+      </div>
+      <div class="qna-a">
+        <div class="qna-a-inner">Tiered SaaS: Lite at ₹2,999/month for individuals; Enterprise at custom pricing for firms. A single Enterprise client saving 500 hours/year at ₹3,000/hour billing rates = ₹15 Lakh in recovered capacity annually — making our product essentially free from an ROI standpoint. At 1% penetration of the CA/lawyer market on Lite pricing alone, ARR exceeds ₹540 Crore.</div>
+      </div>
+    </div>
+
+    <div class="qna-item">
+      <div class="qna-q" onclick="toggleQna(this)">
+        <div class="qna-q-mark">Q</div>
+        <div class="qna-q-text">"Can you expand beyond ITAT to High Courts and Supreme Court?"</div>
+        <div class="qna-arrow">▶</div>
+      </div>
+      <div class="qna-a">
+        <div class="qna-a-inner">Yes — that is Phase 2 of our roadmap. The architecture is modality-agnostic; we can ingest and vectorize any structured judgment corpus. High Court and Supreme Court tax judgments will expand the dataset to 50,000+ decisions and extend our reach to senior advocates arguing constitutional tax matters.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─── CTA ─── -->
+<section class="cta-section" id="contact">
+  <div class="section-tag" style="justify-content:center">Get Involved</div>
+  <h2 class="cta-headline">
+    Ready to Back the<br><em>Future of Legal Intelligence?</em>
+  </h2>
+  <p class="cta-sub">
+    We are raising a Seed / Series A to scale our dataset, expand to High Court cases,<br>and build the distribution layer across India's 18.5 Lakh legal professionals.
+  </p>
+  <div class="cta-actions">
+    <a href="mailto:invest@litigationos.ai" class="btn-primary"><span>Request Investor Deck</span></a>
+    <a href="mailto:demo@litigationos.ai" class="btn-ghost">Book Live Demo</a>
+  </div>
+
+  <div style="max-width:700px;margin:4rem auto 0;display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--border);" class="reveal">
+    <div style="background:var(--ink);padding:2rem;text-align:center;">
+      <div style="font-family:'DM Mono',monospace;font-size:0.6rem;letter-spacing:0.2em;color:var(--text-dim);text-transform:uppercase;margin-bottom:0.5rem">Dataset</div>
+      <div style="font-family:'Playfair Display',serif;font-size:1.6rem;color:var(--gold);font-weight:700">12,000+</div>
+      <div style="font-size:0.75rem;color:var(--text-muted);margin-top:0.25rem">ITAT Judgments</div>
+    </div>
+    <div style="background:var(--ink);padding:2rem;text-align:center;border-left:1px solid var(--border);border-right:1px solid var(--border);">
+      <div style="font-family:'DM Mono',monospace;font-size:0.6rem;letter-spacing:0.2em;color:var(--text-dim);text-transform:uppercase;margin-bottom:0.5rem">Accuracy</div>
+      <div style="font-family:'Playfair Display',serif;font-size:1.6rem;color:var(--gold);font-weight:700">82%</div>
+      <div style="font-size:0.75rem;color:var(--text-muted);margin-top:0.25rem">Outcome Prediction</div>
+    </div>
+    <div style="background:var(--ink);padding:2rem;text-align:center;">
+      <div style="font-family:'DM Mono',monospace;font-size:0.6rem;letter-spacing:0.2em;color:var(--text-dim);text-transform:uppercase;margin-bottom:0.5rem">Time Saved</div>
+      <div style="font-family:'Playfair Display',serif;font-size:1.6rem;color:var(--gold);font-weight:700">95%</div>
+      <div style="font-size:0.75rem;color:var(--text-muted);margin-top:0.25rem">Per Case Research</div>
+    </div>
+  </div>
+</section>
+
+<!-- ─── FOOTER ─── -->
+<footer>
+  <div class="logo">Litigation Intelligence OS</div>
+  <div class="copy">Confidential · For Qualified Investors Only · 2025</div>
+</footer>
+
+<script>
+  // Nav scroll
+  const nav = document.getElementById('nav');
+  window.addEventListener('scroll', () => {
+    nav.classList.toggle('scrolled', window.scrollY > 40);
+  });
+
+  // Reveal on scroll
+  const reveals = document.querySelectorAll('.reveal');
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach((entry, i) => {
+      if (entry.isIntersecting) {
+        setTimeout(() => entry.target.classList.add('visible'), i * 80);
+        observer.unobserve(entry.target);
+      }
+    });
+  }, { threshold: 0.1 });
+  reveals.forEach(el => observer.observe(el));
+
+  // Q&A accordion
+  function toggleQna(el) {
+    const item = el.parentElement;
+    const wasOpen = item.classList.contains('open');
+    document.querySelectorAll('.qna-item').forEach(i => i.classList.remove('open'));
+    if (!wasOpen) item.classList.add('open');
+  }
+
+  // Animate confidence bar on scroll
+  const confBar = document.getElementById('confBar');
+  if (confBar) {
+    confBar.style.width = '0%';
+    const confObserver = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          setTimeout(() => { confBar.style.width = '82%'; }, 300);
+          confObserver.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.5 });
+    confObserver.observe(confBar);
+  }
+
+  // Counter animation
+  function animateCount(el, target, suffix = '') {
+    let count = 0;
+    const duration = 1800;
+    const step = target / (duration / 16);
+    const timer = setInterval(() => {
+      count = Math.min(count + step, target);
+      el.textContent = Math.floor(count) + suffix;
+      if (count >= target) clearInterval(timer);
+    }, 16);
+  }
+</script>
+
+</body>
+</html>
