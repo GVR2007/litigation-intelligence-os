@@ -5,9 +5,15 @@ load_dotenv()
 
 INDIAN_KANOON_API_KEY = os.getenv("INDIAN_KANOON_API_KEY", "")
 
-# Google Gemini — sole AI engine
+# Google Gemini — AI synthesis engine
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL   = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+
+# OpenRouter — embeddings + AI fallback
+# Used for: ChromaDB vector embeddings (openai/text-embedding-3-small)
+# When set, OpenRouter is used for embeddings instead of Gemini (no daily quota)
+# Get a free key at: https://openrouter.ai
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 
 # ── Web Search (Source ⑦) ────────────────────────────────────────────────────
 # Google Custom Search Engine

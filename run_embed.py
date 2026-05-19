@@ -11,10 +11,13 @@ Usage:
     python run_embed.py --sync       # add only new cases not yet indexed
 
 Expected time:
-    FTS5 index  : < 10 seconds
-    ChromaDB    : ~4,350 cases × 3 collections × batches of 50
-                  ≈ 270 API calls × ~0.5s = ~2-3 minutes
-    Cost        : ~₹2-3 one-time (Gemini embedding API)
+    FTS5 index       : < 10 seconds
+    ChromaDB (OR)    : ~4,350 cases × 3 collections ÷ batch of 50
+                       ≈ 270 API calls × ~0.5s = ~2-3 minutes total
+                       Cost: ~$0.03 one-time (OpenRouter text-embedding-3-small)
+    ChromaDB (Gemini): ~4,350 cases × 3 collections ÷ batch of 5
+                       ≈ 2,610 API calls × ~5s = ~3-4 hours
+                       (free tier: 1,000/day limit, needs 3 days)
 
 Re-running is safe — only new cases are indexed (idempotent).
 """
@@ -135,17 +138,27 @@ def cmd_index(sync_only: bool = False):
         print("  Run: pip install chromadb")
         return
 
+    # Check for either OpenRouter or Gemini key
+    or_key     = os.getenv("OPENROUTER_API_KEY", "")
     gemini_key = os.getenv("GEMINI_API_KEY", "")
-    if not gemini_key:
-        try:
-            import config
-            gemini_key = getattr(config, "GEMINI_API_KEY", "")
-        except Exception:
-            pass
+    try:
+        import config
+        or_key     = or_key     or getattr(config, "OPENROUTER_API_KEY", "")
+        gemini_key = gemini_key or getattr(config, "GEMINI_API_KEY", "")
+    except Exception:
+        pass
 
-    if not gemini_key:
-        print("\n  ❌ GEMINI_API_KEY not set.")
-        print("  Add it to your .env file or environment variables.")
+    if or_key:
+        print(f"\n  ✅ Using OpenRouter (text-embedding-3-small, 1536-dim)")
+        print(f"     No daily quota — pay-per-use (~$0.02/1M tokens)")
+    elif gemini_key:
+        print(f"\n  ✅ Using Gemini (gemini-embedding-001, 3072-dim)")
+        print(f"     Free tier: 1,000 embeddings/day limit")
+    else:
+        print("\n  ❌ No embedding API key found.")
+        print("  Add either to your .env file:")
+        print("    OPENROUTER_API_KEY=sk-or-...   (recommended — no daily quota)")
+        print("    GEMINI_API_KEY=AIza...          (free tier, 1000/day limit)")
         return
 
     import config
@@ -194,9 +207,14 @@ def cmd_index(sync_only: bool = False):
         print("     Run --sync after each harvest to add new cases.")
         return
 
-    est_batches = ((total_db - before) // 10) + 1   # batch size = 10
-    est_minutes = est_batches * 3 * 2.5 / 60        # 3 collections × ~2.5s per batch
-    print(f"  Est. time      : ~{est_minutes:.0f} minutes (free tier rate limit: ~2s/batch)")
+    if or_key:
+        est_batches = ((total_db - before) // 50) + 1  # OpenRouter: batch of 50
+        est_minutes = est_batches * 3 * 0.5 / 60       # 3 collections × ~0.5s per batch
+        print(f"  Est. time      : ~{max(1, int(est_minutes))} minutes (OpenRouter, batch=50)")
+    else:
+        est_batches = ((total_db - before) // 5) + 1   # Gemini: batch of 5
+        est_minutes = est_batches * 3 * 5.0 / 60       # 3 collections × ~5s per batch
+        print(f"  Est. time      : ~{int(est_minutes)} minutes (Gemini free tier, batch=5)")
     print(f"\n  Starting in 3 seconds — Ctrl+C to abort...")
     time.sleep(3)
 
