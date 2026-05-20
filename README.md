@@ -297,22 +297,6 @@ pytest tests/ -v
 - `test_rag_retrieval.py` — Hybrid retrieval pipeline, JIT ranking, CBDT retrieval
 - `test_section_detection.py` — IT Act section detection across 130+ sections
 
----
-
-## Verified Seed Judgments
-
-The system ships with **7 verified Supreme Court / High Court judgments** (real ITR/SCC reporters only — no AI-generated citations):
-
-| Citation | Section | Ratio |
-|----------|---------|-------|
-| CIT v. Triumph International Finance (I) Ltd. [2012] 345 ITR 270 (Bom) | 269SS | Genuine business urgency = reasonable cause under §273B |
-| Kailashben Manharlal Choksi v. CIT [2010] 328 ITR 411 (Guj) | 269SS | Medical emergency exempts §269SS compliance |
-| Vijay Kumar Talwar v. CIT [2011] 330 ITR 1 (SC) | 153A | §153A additions require incriminating material from search |
-| CIT v. Continental Warehousing Corp. [2015] 374 ITR 645 (Bom) | 153A | Completed assessment protected without incriminating material |
-| Orissa Corp. Pvt. Ltd. v. CIT [1986] 159 ITR 78 (SC) | 68 | Initial §68 burden discharged → shifts to AO |
-| PCIT v. Saumya Construction [2016] 387 ITR 529 (Guj) | 68 | All 3 elements proven → §68 addition deleted |
-
-The system never presents AI-generated or unverified citations to a practitioner.
 
 ---
 
