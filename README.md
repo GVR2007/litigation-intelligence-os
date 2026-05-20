@@ -329,14 +329,6 @@ All behaviour is controlled via `config.py` and `.env`:
 
 ---
 
-## Contributing
-
-Pull requests welcome. Please:
-1. Run `pytest tests/` before submitting — all 43 tests must pass
-2. Never add fabricated case citations to seed data
-3. New IT Act sections go in `config.py → ITAT_SECTIONS` dict
-
----
 
 ## License
 
