@@ -387,60 +387,123 @@ def _draft_submission(case_id, case, sections, ao_order_text,
                        available_docs, unavailable_docs, all_evidence,
                        top_args, rag_context, submission_type, style,
                        include_citations, include_circulars, extra_instructions):
-    """Call LLM with RAG-grounded citations and stream the submission draft."""
+    """
+    Draft submission grounded in verified precedents.
+
+    Two formats — chosen automatically from what's stored in DB:
+      • notice_requirements present → Reply letter, point-by-point per demand
+      • no notice_requirements      → Written Submissions / Grounds of Appeal
+    No hardcoding of document type names.
+    """
+    import json
     from datetime import datetime
 
-    # ── RAG grounded context (same pipeline as Phase 2) ───────────────────────
-    with st.spinner("🔍 Fetching verified precedents from case database..."):
+    # ── Load document context from DB ─────────────────────────────────────────
+    ao_ctx             = queries.get_ao_context(case_id)
+    notice_requirements = ao_ctx.get("notice_requirements") or []
+    if isinstance(notice_requirements, str):
+        try:
+            notice_requirements = json.loads(notice_requirements)
+        except Exception:
+            notice_requirements = []
+    doc_heading = ao_ctx.get("doc_heading", "").strip()
+
+    # ── RAG grounded context ──────────────────────────────────────────────────
+    with st.spinner("🔍 Fetching verified precedents..."):
         ctx = get_grounded_context(case_id, sections)
     if ctx["count"] == 0:
-        st.warning("⚠️ No precedents found — run the Evidence Engine in Phase 2 first for best results. Drafting with AI knowledge only.")
+        st.warning("⚠️ No precedents found in DB — run Evidence Engine in Phase 2 for best results.")
     else:
         st.success(f"✅ {ctx['count']} precedents loaded via {ctx['source']}")
 
+    # ── Common blocks ─────────────────────────────────────────────────────────
     evidence_block = ""
     if available_docs:
         evidence_block += f"\nDocuments AVAILABLE: {', '.join(available_docs[:15])}"
     if unavailable_docs:
         evidence_block += f"\nDocuments NOT AVAILABLE: {', '.join(unavailable_docs[:10])}"
 
-    args_block = ""
-    if top_args:
-        args_block = "\nLegal arguments identified:\n" + "\n".join(f"- {a}" for a in top_args)
-
-    ao_block = ""
-    if ao_order_text and ao_order_text.strip():
-        ao_block = f"\nAO's key observations / additions:\n{ao_order_text[:800]}"
-
-    style_instructions = {
-        "Formal (ITAT standard)": "Use formal legal English. Number each ground. Use 'it is submitted', 'without prejudice'. Follow ITAT written submission format.",
-        "Concise (bullet points)": "Use brief, punchy submissions. Use bullet points. Get to the legal point immediately. No verbose preamble.",
-        "Aggressive (attack AO order)": "Directly challenge the AO's reasoning. Point out factual errors. Challenge legal basis. Demand deletion in strong terms.",
-    }.get(style, "")
-
-    extra_note = f"\nAdditional instructions: {extra_instructions}" if extra_instructions.strip() else ""
-
-    # ── Build grounded citation block ─────────────────────────────────────────
     verified_block = ""
     if include_citations and ctx["citations_block"]:
-        verified_block = f"""
-VERIFIED PRECEDENTS (retrieved from case database — cite ONLY these):
-{ctx['citations_block']}
-
-⚠️ CITATION RULE: Use ONLY the citations listed above. Do not invent or recall any other citation.
-If a citation is not in the list above, write [CITATION NEEDED] instead."""
+        verified_block = (
+            f"\nVERIFIED PRECEDENTS (cite ONLY from this list):\n{ctx['citations_block']}\n"
+            f"⚠️ Do not use any citation not listed above. Write [CITATION NEEDED] if unsure."
+        )
 
     cbdt_note = ""
     if include_circulars and ctx["cbdt_block"]:
-        cbdt_note = f"\nCBDT CIRCULARS TO REFERENCE:\n{ctx['cbdt_block']}"
+        cbdt_note = f"\nCBDT CIRCULARS:\n{ctx['cbdt_block']}"
 
-    prompt = f"""Draft {submission_type} for this Income Tax case.
+    extra_note = f"\n{extra_instructions}" if extra_instructions.strip() else ""
+
+    style_map = {
+        "Formal (ITAT standard)":    "Formal legal English. Use 'it is submitted', 'without prejudice'.",
+        "Concise (bullet points)":   "Brief and direct. Use bullet points. No verbose preamble.",
+        "Aggressive (attack AO order)": "Challenge AO reasoning directly. Point out errors. Demand deletion.",
+    }
+    style_note = style_map.get(style, "")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # FORMAT A — Notice Reply (point-by-point per demand)
+    # Triggered when: notice_requirements are present in DB
+    # Works for: 142(1), 148A(b), SCN, survey notices, any numbered demand list
+    # ══════════════════════════════════════════════════════════════════════════
+    if notice_requirements:
+        demands_text = "\n".join(
+            f"{i+1}. {req}" for i, req in enumerate(notice_requirements)
+        )
+        heading_line = f"Re: {doc_heading}" if doc_heading else "Re: Notice / Requisition"
+
+        prompt = f"""Draft a formal reply to the following notice/requisition issued to the assessee.
+
+ASSESSEE DETAILS:
+Name/Case: {case.get('case_name','—')}
+Assessment Year: {case.get('assessment_year','—')}
+{heading_line}
+
+DEMANDS / QUERIES RAISED BY THE AUTHORITY:
+{demands_text}
+
+DOCUMENTS AVAILABLE WITH ASSESSEE:
+{', '.join(available_docs[:15]) or 'As per records'}
+{verified_block}
+{cbdt_note}
+{extra_note}
+
+DRAFTING INSTRUCTIONS:
+{style_note}
+- Draft a complete, formal reply letter addressing EACH demand above
+- For EVERY demand: write a numbered response (Response to Query 1, Response to Query 2...)
+- Each response must: (a) acknowledge the query, (b) state what is being furnished,
+  (c) give brief legal / factual explanation where needed
+- For sensitive queries (unexplained investment, cash deposits, contract payments to non-filers):
+  provide a substantive legal reply using the verified precedents
+- Use formal letter format: To, From, Subject, Date, then numbered responses
+- End with: "We trust the above information is satisfactory. In case any further
+  information is required, we shall be glad to furnish the same."
+- Sign off: Yours faithfully, [Assessee Name / Authorised Signatory]
+
+Draft the complete reply in full. Do not leave any query unanswered."""
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # FORMAT B — Written Submissions / Grounds of Appeal
+    # Triggered when: no notice_requirements (assessment order, penalty order, etc.)
+    # ══════════════════════════════════════════════════════════════════════════
+    else:
+        ao_block = ""
+        if ao_order_text and ao_order_text.strip():
+            ao_block = f"\nAO's key observations:\n{ao_order_text[:800]}"
+
+        args_block = ""
+        if top_args:
+            args_block = "\nLegal arguments:\n" + "\n".join(f"- {a}" for a in top_args)
+
+        prompt = f"""Draft {submission_type} for this Income Tax case.
 
 CASE DETAILS:
 Case: {case.get('case_name','—')}
 Client: {case.get('client_name','—')}
 Assessment Year: {case.get('assessment_year','—')}
-Demand: {format_currency(case.get('demand_amount') or 0)}
 Sections: {', '.join(sections)}
 {ao_block}
 {evidence_block}
@@ -449,27 +512,26 @@ Sections: {', '.join(sections)}
 {cbdt_note}
 
 DRAFTING INSTRUCTIONS:
-{style_instructions}
+{style_note}
 {extra_note}
 
 FORMAT:
 - Start with: IN THE INCOME TAX APPELLATE TRIBUNAL
-- Include: Case title, AY, Assessee details
 - GROUNDS OF APPEAL numbered 1, 2, 3...
-- Under each ground: facts, legal argument, verified case law from above list, prayer
-- End with a PRAYER section seeking specific relief
-- Close with: Respectfully submitted
+- Under each ground: facts, legal argument, case law from verified list, prayer
+- End with PRAYER section
+- Close: Respectfully submitted
 
-Draft in full — do not abbreviate or summarize. This is the actual filing document."""
+Draft in full — this is the actual filing document."""
 
     draft_key = f"submission_draft_{case_id}"
 
-    with st.spinner(f"✍️ Drafting {submission_type} with {ctx['count']} verified precedents..."):
+    with st.spinner(f"✍️ Drafting {'Notice Reply' if notice_requirements else submission_type}..."):
         full_text = call_gemini(_SUBMISSION_SYSTEM, prompt,
                                 max_tokens=6000, temperature=0.1)
 
     st.session_state[draft_key] = full_text
-    st.success(f"✅ Draft ready — grounded in {ctx['count']} verified precedents")
+    st.success(f"✅ Draft ready")
     st.rerun()
 
 
