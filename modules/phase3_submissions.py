@@ -391,8 +391,12 @@ def _draft_submission(case_id, case, sections, ao_order_text,
     from datetime import datetime
 
     # ── RAG grounded context (same pipeline as Phase 2) ───────────────────────
-    with st.spinner("🔍 Fetching verified precedents..."):
+    with st.spinner("🔍 Fetching verified precedents from case database..."):
         ctx = get_grounded_context(case_id, sections)
+    if ctx["count"] == 0:
+        st.warning("⚠️ No precedents found — run the Evidence Engine in Phase 2 first for best results. Drafting with AI knowledge only.")
+    else:
+        st.success(f"✅ {ctx['count']} precedents loaded via {ctx['source']}")
 
     evidence_block = ""
     if available_docs:
