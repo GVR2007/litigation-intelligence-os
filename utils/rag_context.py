@@ -1,19 +1,17 @@
 """
 Shared RAG context helper — Phases 3, 4, 7.
 
-3-tier fallback so precedents are ALWAYS returned:
+2-tier lookup — fast, no blocking API calls:
 
-  Tier 1 — Session state (rag_strategy_{case_id})
-            Phase 2 already ran the full pipeline → zero extra cost.
+  Tier 1 — Session state rag_strategy_{case_id}
+            Phase 2 ran the full pipeline → reuse at zero cost.
 
-  Tier 2 — Full RAGPipeline
-            Used when jumping straight to Phase 3/4/7 without Phase 2.
-            Requires ChromaDB to be indexed. Falls through on failure.
+  Tier 2 — FTS5 direct SQLite search  ← ALWAYS works
+            Pure BM25 on itat_precedents. No ChromaDB, no API, no network.
+            Returns seeded SC/HC cases + any ingested judgments instantly.
 
-  Tier 3 — FTS5 direct search  ← ALWAYS works
-            Pure SQLite BM25 search on itat_precedents table.
-            Works with only the 7 seeded SC/HC cases or any ingested judgments.
-            No ChromaDB, no API key, no network needed.
+The full RAGPipeline (slow, API-dependent) is intentionally NOT run here —
+that belongs to Phase 2's Evidence Builder button only.
 """
 
 from __future__ import annotations
@@ -45,24 +43,18 @@ def get_grounded_context(case_id: int, sections: list[str]) -> dict:
     cases: list = []
     source = ""
 
-    # ── Tier 1: reuse Phase 2 session-state result ────────────────────────────
+    # ── Tier 1: reuse Phase 2 session-state result (free) ────────────────────
     strategy = st.session_state.get(f"rag_strategy_{case_id}")
     if strategy is not None:
         cases = getattr(strategy, "retrieved_cases", []) or []
         if cases:
-            source = f"Phase 2 RAG cache ({len(cases)} cases)"
+            source = f"Phase 2 RAG cache"
 
-    # ── Tier 2: full RAG pipeline ─────────────────────────────────────────────
-    if not cases:
-        cases = _run_full_pipeline(case_id, sections)
-        if cases:
-            source = f"RAG pipeline ({len(cases)} cases)"
-
-    # ── Tier 3: FTS5 direct search — always works ────────────────────────────
+    # ── Tier 2: FTS5 direct SQLite search (fast, no API calls) ───────────────
     if not cases:
         cases = _fts_fallback(case_id, sections)
         if cases:
-            source = f"FTS5 search ({len(cases)} cases)"
+            source = f"FTS5 precedent search"
 
     if not cases:
         return _empty()
@@ -83,36 +75,7 @@ def get_grounded_context(case_id: int, sections: list[str]) -> dict:
     }
 
 
-# ── Tier 2: full RAG pipeline ─────────────────────────────────────────────────
-
-def _run_full_pipeline(case_id: int, sections: list[str]) -> list:
-    """Full hybrid RAG — requires ChromaDB. Silent fail → Tier 3."""
-    try:
-        from ai.rag.pipeline import RAGPipeline
-        from ai.rag.models   import CaseQuery
-        from database        import queries
-
-        case = queries.get_case(case_id)
-        ctx  = queries.get_ao_context(case_id)
-
-        q = CaseQuery(
-            case_id             = case_id,
-            sections            = sections,
-            client_facts        = case.get("notes", "") or "",
-            ao_text             = ctx.get("ao_allegations", ""),
-            ao_allegations      = ctx.get("ao_allegations", ""),
-            ao_rejection_reason = ctx.get("ao_rejection_reason", ""),
-            demand_amount       = float(case.get("demand_amount") or 0),
-            case_name           = case.get("case_name", ""),
-            assessment_year     = case.get("assessment_year", ""),
-        )
-        strategy = RAGPipeline().build(q)
-        return getattr(strategy, "retrieved_cases", []) or []
-    except Exception:
-        return []
-
-
-# ── Tier 3: FTS5 fallback — always works ─────────────────────────────────────
+# ── Tier 2: FTS5 fallback — always works ─────────────────────────────────────
 
 def _fts_fallback(case_id: int, sections: list[str]) -> list:
     """
