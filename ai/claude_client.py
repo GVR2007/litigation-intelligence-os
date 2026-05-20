@@ -1,8 +1,8 @@
 """
-AI client — Gemini 2.5 Flash only.
+AI client — OpenRouter (google/gemini-2.0-flash-001).
 
-All call_claude() / stream_claude() calls are forwarded directly to Gemini.
-No Ollama, no Anthropic.
+All call_claude() / stream_claude() calls route through OpenRouter.
+No daily quota — pay-per-use.
 """
 import sys
 import os
@@ -14,27 +14,20 @@ import config
 def call_claude(system_prompt: str, user_message: str,
                 temperature: float = 0.15, max_tokens: int = 4096,
                 use_cache: bool = True, redact: bool = True) -> str:
-    """
-    Call Gemini 2.5 Flash.
-    Drop-in replacement — all phases call this function unchanged.
-    """
-    from ai.gemini_client import call_gemini
-    return call_gemini(
+    """Route to OpenRouter. Drop-in replacement for all phases."""
+    from ai.openrouter_client import call_openrouter
+    return call_openrouter(
         system_prompt, user_message,
         temperature=temperature,
         max_tokens=max_tokens,
-        redact=redact,
     )
 
 
 def stream_claude(system_prompt: str, user_message: str,
                   temperature: float = 0.15, max_tokens: int = 4096):
-    """
-    Stream Gemini 2.5 Flash tokens.
-    Drop-in replacement — all phases that stream call this function unchanged.
-    """
-    from ai.gemini_client import stream_gemini
-    yield from stream_gemini(
+    """Non-streaming fallback via OpenRouter (no streaming wrapper yet)."""
+    from ai.openrouter_client import call_openrouter
+    yield call_openrouter(
         system_prompt, user_message,
         temperature=temperature,
         max_tokens=max_tokens,

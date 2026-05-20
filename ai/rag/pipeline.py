@@ -30,11 +30,12 @@ import config
 
 from ai.rag.models        import (CaseQuery, CaseStrategy, LegalArgument,
                                    RequiredDocument, CounterArgument,
-                                   RetrievedCase)
+                                   RetrievedCase, CourtType)
 from ai.rag.section_graph import expand, get_context_note
 from ai.rag.embedder      import EmbeddingService
 from ai.rag.fts           import FTSIndex
 from ai.rag.retriever     import HybridRetriever
+from ai.ai_client         import AIClient
 from ai.rag.reranker      import Reranker
 
 
@@ -76,22 +77,38 @@ class RAGPipeline:
         log("🔍 Enriching query — extracting structured facts...")
         enriched = self._enrich_query(query)
 
-        # ── 2. HyDE — generate ideal judgment text ───────────────────────────
+        # ── 2. Live IK fetch (shared: web-anchor + JIT source) ──────────────
+        log("🌐 Fetching live IK results for web-anchoring + JIT vectorization...")
+        live_ik_results = self._fetch_live_ik(query)
+        log(f"   {len(live_ik_results)} live result(s) fetched")
+
+        # ── 3. Web-Anchored Query Expansion ──────────────────────────────────
+        if live_ik_results:
+            log("🔗 Web-anchoring query with real legal terms from IK results...")
+            enriched = self._web_anchor_expansion(live_ik_results, enriched)
+            anchored = enriched.get("web_anchored_terms", [])
+            citations = enriched.get("web_anchored_citations", [])
+            if anchored or citations:
+                log(f"   Anchored terms: {anchored[:4]} | citations: {len(citations)}")
+
+        # ── 4. HyDE — generate ideal judgment text ───────────────────────────
         log("📝 Generating hypothetical ideal judgment (HyDE)...")
         hyde_doc = self._generate_hyde(query, enriched)
 
-        # Swap client_facts with HyDE text for embedding — richer query
+        # Swap client_facts with HyDE text — preserve AO language fields
         hyde_query = CaseQuery(
-            case_id         = query.case_id,
-            sections        = query.sections,
-            client_facts    = hyde_doc,
-            ao_text         = query.ao_text,
-            demand_amount   = query.demand_amount,
-            case_name       = query.case_name,
-            assessment_year = query.assessment_year,
+            case_id             = query.case_id,
+            sections            = query.sections,
+            client_facts        = hyde_doc,
+            ao_text             = query.ao_text,
+            ao_allegations      = query.ao_allegations,
+            ao_rejection_reason = query.ao_rejection_reason,
+            demand_amount       = query.demand_amount,
+            case_name           = query.case_name,
+            assessment_year     = query.assessment_year,
         )
 
-        # ── 3. Expand sections ───────────────────────────────────────────────
+        # ── 5. Expand sections ───────────────────────────────────────────────
         log(f"🔗 Expanding sections: {query.sections} → related sections...")
         expanded_sections = expand(
             query.sections,
@@ -100,25 +117,42 @@ class RAGPipeline:
         )
         log(f"   Expanded to: {expanded_sections}")
 
-        # ── 4. Retrieve ──────────────────────────────────────────────────────
-        log("🗄️  Running hybrid retrieval (vector + FTS5 + RRF)...")
-        candidates = self._retriever.retrieve(
-            hyde_query, expanded_sections, top_k=25
+        # ── 6. Federated Retrieval (3 pools → cross-pool RRF) ────────────────
+        log("🗄️  Pool A: hybrid DB retrieval (vector + FTS5 + RRF)...")
+        pool_a = self._retriever.retrieve(
+            hyde_query, expanded_sections, top_k=25,
+            web_anchored_terms=enriched.get("web_anchored_terms", []),
         )
-        log(f"   Retrieved {len(candidates)} candidates")
+        log(f"   Pool A: {len(pool_a)} candidates")
 
-        # ── 5. Rerank ────────────────────────────────────────────────────────
+        log("⚡ Pool B: JIT vectorizing live IK results...")
+        pool_b = self._retriever.jit_rank(
+            live_ik_results, hyde_query, top_k=10
+        )
+        log(f"   Pool B: {len(pool_b)} JIT-ranked IK result(s)")
+
+        log("📜 Pool C: searching CBDT circulars...")
+        pool_c = self._retriever.retrieve_cbdt(query, expanded_sections, top_k=5)
+        log(f"   Pool C: {len(pool_c)} CBDT circular(s)")
+
+        log("🔀 Cross-pool RRF — merging all three pools...")
+        candidates = HybridRetriever.cross_pool_rrf(
+            pool_a, pool_b, pool_c, top_k=30
+        )
+        log(f"   {len(candidates)} candidates after federated RRF")
+
+        # ── 7. Rerank ────────────────────────────────────────────────────────
         if candidates:
-            log("⚖️  Reranking with Gemini cross-encoder...")
+            log("⚖️  Reranking with AI cross-encoder (OpenRouter)...")
             top_cases = self._reranker.rerank(candidates, query, top_k=12)
             log(f"   Top {len(top_cases)} cases after reranking")
         else:
             top_cases = []
 
-        # ── 6. Citation chain ────────────────────────────────────────────────
+        # ── 8. Agentic citation chain (3-hop bounded agent) ──────────────────
         if top_cases:
-            log("🔗 Fetching citation chains (SC authorities)...")
-            top_cases = self._expand_citation_chain(top_cases)
+            log("🤖 Agentic citation chain (up to 3 hops)...")
+            top_cases = self._agentic_citation_chain(top_cases, query, log)
 
         # ── 7. Two-phase synthesis ───────────────────────────────────────────
         log("🧠 Phase A — identifying strongest legal arguments...")
@@ -156,12 +190,16 @@ class RAGPipeline:
         """
         section_context = get_context_note(query.sections)
 
+        # AO's language takes priority — it shares vocabulary with ITAT judgments
+        ao_context = query.ao_allegations or (query.ao_text[:400] if query.ao_text else "")
+
         prompt = f"""Extract structured legal facts from this client situation.
 
 SECTIONS: {', '.join(query.sections)}
 SECTION CONTEXT: {section_context[:500]}
 CLIENT FACTS: {query.client_facts}
-AO ALLEGATION: {query.ao_text[:400] if query.ao_text else 'Not provided'}
+AO ALLEGATION (exact language): {ao_context or 'Not provided'}
+AO REJECTION REASON: {query.ao_rejection_reason or 'Not provided'}
 
 Return JSON with exactly these keys:
 {{
@@ -172,11 +210,9 @@ Return JSON with exactly these keys:
   "fts_keywords":     ["5-8 specific legal keywords for full-text search"],
   "hyde_context":     "2-sentence description of what ideal matching judgment looks like"
 }}"""
-
-        from ai.gemini_client import call_gemini
-        raw = call_gemini(_SYNTHESIS_SYSTEM, prompt,
-                          temperature=0.05, max_tokens=512, redact=False)
-        return self._parse_json(raw) or {}
+        raw = AIClient.call(_SYNTHESIS_SYSTEM, prompt,
+                            temperature=0.05, max_tokens=512)
+        return AIClient.parse_json(raw) or {}
 
     # ── Step 2: HyDE ─────────────────────────────────────────────────────────
 
@@ -188,31 +224,326 @@ Return JSON with exactly these keys:
         section_context = get_context_note(query.sections)
         hyde_ctx        = enriched.get("hyde_context", "")
 
+        # Use AO's exact allegation as the fact pattern anchor — produces sharper HyDE
+        ao_allegation = query.ao_allegations or ""
+        ao_rejection  = query.ao_rejection_reason or ""
+
         prompt = f"""Write a 200-word summary of an ITAT/High Court judgment that would be
 the IDEAL precedent for this client's situation.
 
 CLIENT: {query.client_facts}
 SECTIONS: {', '.join(query.sections)}
 LEGAL CONTEXT: {section_context[:400]}
+{f'AO ALLEGED: {ao_allegation[:300]}' if ao_allegation else ''}
+{f'AO REJECTED EXPLANATION BECAUSE: {ao_rejection[:200]}' if ao_rejection else ''}
 {f'ADDITIONAL CONTEXT: {hyde_ctx}' if hyde_ctx else ''}
 
 Write as if summarising a real judgment. Include:
-- The fact pattern (similar to client's situation)
-- What documents the assessee produced
-- Why the tribunal decided in assessee's favour
+- The SAME type of AO allegation that was raised and defeated
+- The SPECIFIC documents the assessee produced to counter it
+- Why the tribunal deleted the addition / penalty
 - The legal principle established
 
 Write only the judgment summary — no introduction, no commentary."""
-
-        from ai.gemini_client import call_gemini
-        hyde = call_gemini(_SYNTHESIS_SYSTEM, prompt,
-                           temperature=0.2, max_tokens=512, redact=False)
+        hyde = AIClient.call(_SYNTHESIS_SYSTEM, prompt,
+                             temperature=0.2, max_tokens=512)
 
         if hyde.startswith("[ERROR]"):
             return query.client_facts   # fallback to original
         return hyde
 
+    # ── Step 2B: Live IK fetch (shared source for web-anchor + JIT) ─────────
+
+    @staticmethod
+    def _fetch_live_ik(query: CaseQuery, max_results: int = 15) -> list[dict]:
+        """
+        Single IK fetch using AO allegation language as query.
+        Results are reused by both web-anchor expansion and JIT vectorization —
+        so IK is called only once per pipeline run.
+        """
+        try:
+            from ai.indian_kanoon import search_cases
+            seed = (query.ao_allegations or query.ao_rejection_reason
+                    or query.client_facts or "")
+            if len(seed.split()) < 3:
+                return []
+            raw  = search_cases(seed[:200])
+            docs = raw.get("docs", [])[:max_results]
+            return [d for d in docs if d.get("tid")]
+        except Exception:
+            return []
+
+    # ── Step 3: Web-Anchored Query Expansion ─────────────────────────────────
+
+    @staticmethod
+    def _web_anchor_expansion(ik_results: list[dict], enriched: dict) -> dict:
+        """
+        Extract real legal terms and case citations from live IK results.
+        These ground the query in vocabulary that actually appears in ITAT judgments —
+        not AI-generated synonyms.
+
+        Adds to enriched:
+          web_anchored_terms    — legal keywords found in IK headlines
+          web_anchored_citations — case citations found in IK titles
+          fts_keywords          — extended with anchored terms for FTS search
+        """
+        _HIGH_SIGNAL = [
+            "identity", "creditworthiness", "genuineness", "reasonable cause",
+            "burden of proof", "incriminating material", "contemporaneous",
+            "unexplained", "cash credit", "penalty deleted", "addition deleted",
+            "confirmation letter", "affidavit", "source of funds", "agricultural",
+            "bank statement", "ITR filed", "lender", "creditor", "satisfaction note",
+            "rule 6DD", "section 273B", "bona fide", "books of account",
+        ]
+        _CITATION_RE = re.compile(
+            r'[A-Z][a-zA-Z .]+v\.?\s+[A-Z][a-zA-Z .]+\[?\d{4}\]?',
+            re.IGNORECASE,
+        )
+
+        terms:     list[str] = []
+        citations: list[str] = []
+
+        for doc in ik_results:
+            text = ((doc.get("headline") or "") + " " +
+                    (doc.get("title") or "")).lower()
+
+            for signal in _HIGH_SIGNAL:
+                if signal in text and signal not in terms:
+                    terms.append(signal)
+
+            for m in _CITATION_RE.finditer(doc.get("title", "")):
+                cit = m.group(0).strip()[:80]
+                if cit not in citations:
+                    citations.append(cit)
+
+        enriched = dict(enriched)   # don't mutate caller's dict
+        enriched["web_anchored_terms"]     = terms[:8]
+        enriched["web_anchored_citations"] = citations[:4]
+
+        # Extend fts_keywords so FTS query gets these real terms
+        existing_kw = enriched.get("fts_keywords", [])
+        enriched["fts_keywords"] = list(dict.fromkeys(existing_kw + terms[:4]))
+
+        return enriched
+
+    # ── Step 5B: Extract documents grounded in real cases ────────────────────
+
+    @staticmethod
+    def extract_docs_from_cases(
+        cases: list[RetrievedCase],
+        query: CaseQuery,
+    ) -> list[dict]:
+        """
+        Pull evidence items directly from retrieved cases — no AI imagination.
+
+        Sources in priority order:
+        1. documents_accepted JSON field (populated during .txt ingest)
+        2. key_ratio text — regex-mine document mentions
+        3. facts_summary text — regex-mine document mentions
+
+        Each item is grounded: it comes from a real case citation.
+        Returns flat list of dicts compatible with add_evidence().
+        """
+        import re, json as _json
+
+        # Patterns for document names mentioned in judgment text
+        _DOC_RE = re.compile(
+            r"\b(bank\s+(?:statement|passbook)|"
+            r"(?:confirmation|affidavit|declaration)\s+(?:letter|from|of|by)[^,.]{0,40}|"
+            r"(?:ITR|income.tax\s+return)\s+(?:of|filed\s+by)[^,.]{0,40}|"
+            r"(?:ledger|cash\s+book|day\s+book|journal)[^,.]{0,30}|"
+            r"(?:balance\s+sheet|profit\s+and\s+loss)[^,.]{0,20}|"
+            r"(?:PAN\s+card|aadhar|identity\s+proof)[^,.]{0,20}|"
+            r"sale\s+deed|gift\s+deed|loan\s+agreement|"
+            r"(?:audit\s+report|Form\s+3C[BD])[^,.]{0,20}|"
+            r"Form\s+(?:16|26AS|15CA|15CB)|"
+            r"GSTR-\w+|GST\s+return|"
+            r"valuation\s+report[^,.]{0,20}|"
+            r"registered\s+(?:deed|agreement)[^,.]{0,20})",
+            re.IGNORECASE,
+        )
+
+        seen:  set  = set()
+        items: list = []
+
+        for case in cases:
+            if not case.win_for_assessee:
+                continue  # skip Revenue-win cases for document extraction
+
+            # Source 1: structured documents_accepted JSON
+            raw_docs = getattr(case, "documents_accepted", "") or ""
+            doc_names: list[str] = []
+            if raw_docs:
+                try:
+                    parsed = _json.loads(raw_docs)
+                    if isinstance(parsed, list):
+                        doc_names = [str(d).strip() for d in parsed if d]
+                except Exception:
+                    pass
+
+            # Source 2: mine key_ratio + facts_summary text
+            for text in [case.key_ratio, case.facts_summary]:
+                for m in _DOC_RE.finditer(text or ""):
+                    doc = m.group(0).strip().rstrip(".,;")
+                    if len(doc) > 8:
+                        doc_names.append(doc)
+
+            for doc in doc_names:
+                key = doc.lower()[:50]
+                if key in seen:
+                    continue
+                seen.add(key)
+
+                # Find the relevant section for this document
+                doc_section = case.section or (
+                    query.sections[0] if query.sections else ""
+                )
+
+                items.append({
+                    "section":          doc_section,
+                    "document_name":    doc,
+                    "win_boost":        min(30, 10 + case.final_score * 10),
+                    "mandatory":        True,
+                    "tribunal_verdict": "accepted",
+                    "rejection_reason": "",
+                    "accepted_in":      [case.citation],
+                    "rejected_in":      [],
+                    "acceptance_count": 1,
+                    "why_it_matters":   case.key_ratio[:200] if case.key_ratio else "",
+                    "how_to_obtain":    "Collect from client records / relevant authority",
+                    "source":           "rag-case-grounded",
+                    "counter_allegation": query.ao_allegations[:150] if query.ao_allegations else "",
+                })
+
+        return items
+
     # ── Step 6: Citation chain ────────────────────────────────────────────────
+
+    # ── Step 8: Agentic citation chain (replaces _expand_citation_chain) ─────
+
+    def _agentic_citation_chain(self, cases: list[RetrievedCase],
+                                 query: CaseQuery,
+                                 log) -> list[RetrievedCase]:
+        """
+        3-hop bounded agentic citation chain.
+
+        Hop 1: Extract SC citations referenced inside top cases' key_ratio text.
+        Hop 2: AI decides which citations are worth chasing (prevents runaway).
+        Hop 3: Fetch AI-approved SC cases — local DB first, IK API fallback.
+
+        Hard bounds: checks top 6 cases, fetches at most 3 new authorities.
+        """
+        existing: set[str] = {c.citation.lower() for c in cases}
+        sc_refs:  list[str] = []
+
+        # Hop 1 — mine SC citations from top-6 cases' key_ratio
+        for case in cases[:6]:
+            ref = self._extract_sc_citation(case.key_ratio)
+            if ref and ref.lower() not in existing:
+                sc_refs.append(ref)
+
+        if not sc_refs:
+            log("   No SC citations found in top cases — skipping chain")
+            return cases
+
+        log(f"   Hop 1: {len(sc_refs)} SC citation(s) detected: {sc_refs[:3]}")
+
+        # Hop 2 — AI decides which are relevant enough to fetch
+        decide_prompt = f"""You are reviewing ITAT case citations to decide which
+Supreme Court authorities should be fetched for deeper analysis.
+
+CLIENT SECTIONS: {', '.join(query.sections)}
+CLIENT FACTS (brief): {(query.client_facts or '')[:200]}
+AO ALLEGATION: {(query.ao_allegations or '')[:150]}
+
+SC CITATIONS FOUND IN RETRIEVED CASES:
+{chr(10).join(f'- {r}' for r in sc_refs[:5])}
+
+Which citations directly address the sections and AO allegation above?
+Return JSON only: {{"fetch": ["citation..."], "skip": ["citation..."]}}
+Only put citations in "fetch" if they directly bear on the sections listed."""
+
+        raw_decision = AIClient.call(_SYNTHESIS_SYSTEM, decide_prompt,
+                                     temperature=0.0, max_tokens=256)
+        decision     = AIClient.parse_json(raw_decision) or {}
+        to_fetch: list[str] = decision.get("fetch", sc_refs[:2])  # fallback: first 2
+
+        log(f"   Hop 2: agent approved {len(to_fetch)} citation(s) to fetch: {to_fetch[:3]}")
+
+        # Hop 3 — fetch approved citations
+        additions: list[RetrievedCase] = []
+        for ref in to_fetch[:3]:   # hard cap — max 3 new authority cases
+            if ref.lower() in existing:
+                continue
+
+            # Try local DB first (zero latency)
+            sc_case = self._fetch_sc_case(ref)
+
+            # IK API fallback if not in local DB
+            if sc_case is None:
+                sc_case = self._fetch_via_ik(ref)
+
+            if sc_case and sc_case.citation.lower() not in existing:
+                additions.append(sc_case)
+                existing.add(sc_case.citation.lower())
+                log(f"   Hop 3 ✓ {sc_case.citation[:60]}")
+
+            time.sleep(0.3)   # polite rate limit
+
+        log(f"   Citation chain complete — {len(additions)} new authority case(s) added")
+        return cases + additions
+
+    @staticmethod
+    def _fetch_via_ik(citation: str) -> RetrievedCase | None:
+        """
+        Fetch a specific case from IndianKanoon by citation text (IK search fallback).
+        Returns an ephemeral RetrievedCase (db_id < -2000) or None on failure.
+        """
+        try:
+            from ai.indian_kanoon import search_cases
+            from ai.rag.retriever import _parse_court
+
+            results = search_cases(citation[:80])
+            docs    = results.get("docs", [])
+            if not docs:
+                return None
+
+            doc   = docs[0]
+            title = doc.get("title", citation)
+
+            year  = 0
+            m     = re.search(r'\b(19|20)\d{2}\b', title)
+            if m:
+                year = int(m.group(0))
+
+            t_up = title.upper()
+            if "(SC)" in t_up or "SUPREME COURT" in t_up:
+                court = CourtType.SC
+            elif any(hc in t_up for hc in
+                     ["HIGH COURT", "(HC)", "(BOM)", "(DEL)", "(GUJ)",
+                      "(MAD)", "(CAL)", "(ALL)", "(KER)", "(P&H)"]):
+                court = CourtType.HC
+            else:
+                court = CourtType.ITAT
+
+            rc = RetrievedCase(
+                db_id            = -abs(hash(citation) % 10_000) - 2_000,
+                citation         = title[:150],
+                court_type       = court,
+                year             = year,
+                section          = "",
+                key_ratio        = doc.get("headline", "")[:500],
+                facts_summary    = doc.get("headline", "")[:300],
+                url              = f"https://indiankanoon.org/doc/{doc.get('tid', '')}/",
+                win_for_assessee = True,
+                rerank_score     = 7.5,   # IK authority — decent default score
+            )
+            rc.apply_boosts()
+            return rc
+        except Exception:
+            return None
+
+    # ── Legacy (kept for reference — not called by build()) ──────────────────
 
     def _expand_citation_chain(self, cases: list[RetrievedCase]) -> list[RetrievedCase]:
         """
@@ -334,11 +665,9 @@ Return JSON array of exactly 3 objects:
   }},
   ...
 ]"""
-
-        from ai.gemini_client import call_gemini
-        raw     = call_gemini(_SYNTHESIS_SYSTEM, prompt,
-                              temperature=0.05, max_tokens=1024, redact=False)
-        parsed  = self._parse_json(raw)
+        raw     = AIClient.call(_SYNTHESIS_SYSTEM, prompt,
+                                temperature=0.05, max_tokens=1024)
+        parsed  = AIClient.parse_json(raw)
 
         if not isinstance(parsed, list):
             return []
@@ -414,11 +743,9 @@ Return JSON array — one object per argument:
   }},
   ...
 ]"""
-
-        from ai.gemini_client import call_gemini
-        raw    = call_gemini(_SYNTHESIS_SYSTEM, prompt,
-                             temperature=0.05, max_tokens=3000, redact=False)
-        parsed = self._parse_json(raw)
+        raw    = AIClient.call(_SYNTHESIS_SYSTEM, prompt,
+                               temperature=0.05, max_tokens=3000)
+        parsed = AIClient.parse_json(raw)
 
         if not isinstance(parsed, list):
             return arguments
@@ -488,11 +815,9 @@ Return JSON array of 3 counter-argument objects:
   }},
   ...
 ]"""
-
-        from ai.gemini_client import call_gemini
-        raw    = call_gemini(_SYNTHESIS_SYSTEM, prompt,
-                             temperature=0.1, max_tokens=1024, redact=False)
-        parsed = self._parse_json(raw)
+        raw    = AIClient.call(_SYNTHESIS_SYSTEM, prompt,
+                               temperature=0.1, max_tokens=1024)
+        parsed = AIClient.parse_json(raw)
 
         if not isinstance(parsed, list):
             return []

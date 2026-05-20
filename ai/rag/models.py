@@ -20,44 +20,60 @@ class CourtType(str, Enum):
 
 @dataclass
 class CaseQuery:
-    case_id:         int
-    sections:        list[str]
-    client_facts:    str
-    ao_text:         str   = ""
-    demand_amount:   float = 0.0
-    case_name:       str   = ""
-    assessment_year: str   = ""
+    case_id:             int
+    sections:            list[str]
+    client_facts:        str
+    ao_text:             str   = ""
+    ao_allegations:      str   = ""   # AO's exact objection language — primary query driver
+    ao_rejection_reason: str   = ""   # Why AO rejected assessee's explanation
+    demand_amount:       float = 0.0
+    case_name:           str   = ""
+    assessment_year:     str   = ""
 
     def search_text(self) -> str:
-        """Single string used for embedding and FTS queries."""
-        parts = [self.client_facts]
-        if self.ao_text:
-            parts.append(self.ao_text[:500])
+        """
+        Single string used for embedding and FTS queries.
+        Priority: AO's own language > client facts > AO order text > sections.
+        AO allegation language produces the highest-quality matches because
+        ITAT judgments use the same legal vocabulary as AO orders.
+        """
+        parts = []
+        # Highest signal: AO's exact allegation — same words appear in winning ITAT cases
+        if self.ao_allegations:
+            parts.append(self.ao_allegations[:400])
+        if self.ao_rejection_reason:
+            parts.append(self.ao_rejection_reason[:200])
+        # Client facts as context
+        if self.client_facts:
+            parts.append(self.client_facts[:300])
+        # Sections for FTS anchor
         if self.sections:
             parts.append("section " + " ".join(self.sections))
-        return " ".join(parts)
+        return " ".join(parts) if parts else self.client_facts
 
 
 # ── Retrieval ─────────────────────────────────────────────────────────────────
 
 @dataclass
 class RetrievedCase:
-    db_id:         int
-    citation:      str
-    court_type:    CourtType
-    year:          int
-    section:       str
-    key_ratio:     str
-    facts_summary: str
-    url:           str
+    db_id:              int
+    citation:           str
+    court_type:         CourtType
+    year:               int
+    section:            str
+    key_ratio:          str
+    facts_summary:      str
+    url:                str
+    win_for_assessee:   bool  = True   # False = Revenue won — used to skip doc extraction
+    documents_accepted: str   = ""     # JSON list of docs accepted in this case
 
     # Scores filled at each stage
     vector_score:          float = 0.0   # cosine similarity from ChromaDB
     fts_rank:              int   = 9999  # BM25 rank from FTS5 (lower = better)
     rrf_score:             float = 0.0   # reciprocal rank fusion combined score
-    rerank_score:          float = 0.0   # Gemini cross-encoder score 0-10
+    rerank_score:          float = 0.0   # cross-encoder score 0-10
     final_score:           float = 0.0   # after authority + recency boost
-    rerank_explanation:    str   = ""    # why Gemini scored it this way
+    rerank_explanation:    str   = ""    # why it was scored this way
 
     @property
     def authority_weight(self) -> float:

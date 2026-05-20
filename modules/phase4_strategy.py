@@ -11,7 +11,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from database import queries
 from utils.helpers import parse_sections, format_currency
-from ai.gemini_client import call_gemini, stream_gemini
+from ai.openrouter_client import call_openrouter as call_gemini
 
 _STRATEGY_SYSTEM = """You are a senior Indian Income Tax advocate with 25 years of ITAT
 and High Court experience. You prepare litigation strategy, simulate the Departmental
@@ -133,12 +133,7 @@ Be brutal. The point is to expose every gap."""
         placeholder = st.empty()
         full = ""
         with st.spinner("Simulating Revenue attack..."):
-            try:
-                for chunk in stream_gemini(_STRATEGY_SYSTEM, prompt, max_tokens=5000):
-                    full += chunk
-                    placeholder.markdown(full + "▌")
-            except Exception:
-                full = call_gemini(_STRATEGY_SYSTEM, prompt, max_tokens=5000)
+            full = call_gemini(_STRATEGY_SYSTEM, prompt, max_tokens=5000)
         placeholder.markdown(full)
         st.session_state[dr_key] = full
 
@@ -254,12 +249,7 @@ Generate one chit for each section in dispute. Make them self-contained — the 
         placeholder = st.empty()
         full = ""
         with st.spinner("Generating argument chits..."):
-            try:
-                for chunk in stream_gemini(_STRATEGY_SYSTEM, prompt, max_tokens=5000):
-                    full += chunk
-                    placeholder.markdown(full + "▌")
-            except Exception:
-                full = call_gemini(_STRATEGY_SYSTEM, prompt, max_tokens=5000)
+            full = call_gemini(_STRATEGY_SYSTEM, prompt, max_tokens=5000)
         placeholder.markdown(full)
         st.session_state[chit_key] = full
 
@@ -337,12 +327,7 @@ End with a "Opening your submissions" script (3-4 sentences to say when you stan
         placeholder = st.empty()
         full = ""
         with st.spinner("Predicting bench questions..."):
-            try:
-                for chunk in stream_gemini(_STRATEGY_SYSTEM, prompt, max_tokens=5000):
-                    full += chunk
-                    placeholder.markdown(full + "▌")
-            except Exception:
-                full = call_gemini(_STRATEGY_SYSTEM, prompt, max_tokens=5000)
+            full = call_gemini(_STRATEGY_SYSTEM, prompt, max_tokens=5000)
         placeholder.markdown(full)
         st.session_state[qns_key] = full
 

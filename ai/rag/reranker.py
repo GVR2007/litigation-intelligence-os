@@ -101,8 +101,8 @@ Return a JSON array with exactly {len(batch)} objects, one per case in order:
   ...
 ]"""
 
-        from ai.gemini_client import call_gemini
-        raw = call_gemini(_SYSTEM, prompt, temperature=0.05, max_tokens=1024, redact=False)
+        from ai.ai_client import AIClient
+        raw = AIClient.call(_SYSTEM, prompt, temperature=0.05, max_tokens=1024)
 
         scores = self._parse_scores(raw, len(batch))
 

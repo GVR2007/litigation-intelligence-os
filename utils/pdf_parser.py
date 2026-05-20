@@ -17,7 +17,7 @@ def extract_text_from_pdf(pdf_path: str) -> str:
 
     # Scanned PDF detection — too few words means no text layer
     if len(text.split()) < _OCR_WORD_THRESHOLD:
-        ocr_text = _ocr_with_gemini(pdf_path)
+        ocr_text = _ocr_with_openrouter(pdf_path)
         if ocr_text and len(ocr_text.split()) > len(text.split()):
             return ocr_text
 
@@ -29,7 +29,7 @@ def _extract_native(pdf_path: str) -> str:
     try:
         import fitz
         doc  = fitz.open(pdf_path)
-        text = "\n".join(page.get_text() for page in doc)
+        text = "\x0c".join(page.get_text() for page in doc)   # \x0c = form-feed, one per page
         doc.close()
         if text.strip():
             return text
@@ -38,17 +38,18 @@ def _extract_native(pdf_path: str) -> str:
     try:
         import pdfplumber
         with pdfplumber.open(pdf_path) as pdf:
-            return "\n".join(page.extract_text() or "" for page in pdf.pages)
+            return "\x0c".join(page.extract_text() or "" for page in pdf.pages)
     except ImportError:
         pass
     return ""
 
 
-def _ocr_with_gemini(pdf_path: str) -> str:
+def _ocr_with_openrouter(pdf_path: str) -> str:
     """
-    OCR fallback using Gemini Vision API — no extra install needed.
-    Converts each PDF page to a PNG image and sends to Gemini for text extraction.
-    Works on scanned AO orders, notices, printed PDFs — anything without a text layer.
+    OCR fallback using OpenRouter vision model (Gemini Flash via OpenRouter).
+    Converts each PDF page to a PNG image and sends via the OpenAI-compatible
+    vision API endpoint. No separate Gemini API key needed — uses OPENROUTER_API_KEY.
+    Works on scanned AO orders, notices, printed PDFs without a text layer.
     """
     try:
         import fitz
@@ -56,62 +57,77 @@ def _ocr_with_gemini(pdf_path: str) -> str:
         import requests
         import config
 
-        key = getattr(config, "GEMINI_API_KEY", "") or os.getenv("GEMINI_API_KEY", "")
+        key = getattr(config, "OPENROUTER_API_KEY", "") or os.getenv("OPENROUTER_API_KEY", "")
         if not key:
             return ""
 
         doc   = fitz.open(pdf_path)
-        pages = list(doc)[:15]          # cap at 15 pages to stay within limits
+        pages = list(doc)[:15]          # cap at 15 pages
         texts = []
 
-        for i, page in enumerate(pages):
-            pix      = page.get_pixmap(dpi=200)
-            img_b64  = base64.b64encode(pix.tobytes("png")).decode()
+        _OCR_SYSTEM = (
+            "You are an OCR engine specialised in Indian income tax documents. "
+            "Extract ALL text exactly as written — preserve section numbers, "
+            "amounts in rupees, names, dates, PAN numbers. Return only the "
+            "extracted text, nothing else."
+        )
+        _OCR_PROMPT = (
+            "This is a page from an Indian income tax assessment order or notice. "
+            "Extract ALL text exactly as written."
+        )
+
+        for page in pages:
+            pix     = page.get_pixmap(dpi=200)
+            img_b64 = base64.b64encode(pix.tobytes("png")).decode()
 
             payload = {
-                "contents": [{
-                    "parts": [
-                        {
-                            "text": (
-                                "This is a page from an Indian income tax assessment order or "
-                                "penalty notice. Extract ALL text exactly as written — "
-                                "preserve section numbers, amounts, names, dates. "
-                                "Return only the extracted text, nothing else."
-                            )
-                        },
-                        {
-                            "inline_data": {
-                                "mime_type": "image/png",
-                                "data": img_b64,
-                            }
-                        },
-                    ]
-                }],
-                "generationConfig": {"temperature": 0},
+                "model": "google/gemini-2.0-flash-001",
+                "messages": [
+                    {"role": "system", "content": _OCR_SYSTEM},
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text",      "text": _OCR_PROMPT},
+                            {"type": "image_url", "image_url": {
+                                "url": f"data:image/png;base64,{img_b64}"
+                            }},
+                        ],
+                    },
+                ],
+                "temperature": 0,
+                "max_tokens": 4096,
             }
 
             resp = requests.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/"
-                f"gemini-2.0-flash:generateContent?key={key}",
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {key}",
+                    "Content-Type":  "application/json",
+                    "HTTP-Referer":  "https://litigation-os",
+                    "X-Title":       "LitigationOS-OCR",
+                },
                 json=payload,
-                timeout=30,
+                timeout=60,
             )
             if resp.status_code == 200:
                 page_text = (
                     resp.json()
-                    .get("candidates", [{}])[0]
-                    .get("content", {})
-                    .get("parts", [{}])[0]
-                    .get("text", "")
+                    .get("choices", [{}])[0]
+                    .get("message", {})
+                    .get("content", "")
                 )
                 if page_text:
                     texts.append(page_text)
 
         doc.close()
-        return "\n\n".join(texts)
+        return "\x0c".join(texts)   # form-feed between pages keeps page_count accurate
 
     except Exception:
         return ""
+
+
+# Keep old name as alias for any legacy callers
+_ocr_with_gemini = _ocr_with_openrouter
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -404,14 +420,38 @@ def extract_ao_name(text: str) -> str:
 
 def parse_assessment_order(pdf_path: str) -> dict:
     text = extract_text_from_pdf(pdf_path)
-    return {
-        "raw_text": text,
+
+    base = {
+        "raw_text":          text,
         "sections_violated": detect_sections_from_text(text),
-        "demand_amount": extract_demand_amount(text),
-        "assessment_year": extract_assessment_year(text),
-        "pan": extract_pan(text),
-        "assessee_name": extract_assessee_name(text),
-        "ao_name": extract_ao_name(text),
-        "word_count": len(text.split()),
-        "page_count": text.count("\x0c") + 1,
+        "demand_amount":     extract_demand_amount(text),
+        "assessment_year":   extract_assessment_year(text),
+        "pan":               extract_pan(text),
+        "assessee_name":     extract_assessee_name(text),
+        "ao_name":           extract_ao_name(text),
+        "word_count":        len(text.split()),
+        "page_count":        text.count("\x0c") + 1,
     }
+
+    # Stage 1+2: structured case fact extraction
+    try:
+        from utils.case_extractor import extract_case_facts
+        facts = extract_case_facts(text)
+        base.update(facts)
+
+        # If regex found additions with sections not yet in detected list,
+        # add them automatically
+        detected = set(base["sections_violated"])
+        for add in facts.get("additions", []):
+            sec = add.get("section", "").strip()
+            if sec and sec not in detected:
+                base["sections_violated"].append(sec)
+
+        # Use AI demand total if regex missed it
+        if not base["demand_amount"] and facts.get("disputed_total"):
+            base["demand_amount"] = facts["disputed_total"]
+
+    except Exception:
+        pass   # extraction failure is non-fatal — base metadata still returned
+
+    return base

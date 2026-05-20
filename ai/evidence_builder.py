@@ -103,11 +103,49 @@ _IK_QUERIES: dict[str, list[str]] = {
 }
 
 
-def _default_ik_queries(section: str) -> list[str]:
-    return [
-        f"{section} income tax evidence documents ITAT",
-        f"{section} penalty deleted accepted assessee won",
-    ]
+def _build_ik_queries(
+    section: str,
+    ao_allegations: str = "",
+    ao_rejection_reason: str = "",
+    case_facts: str = "",
+) -> list[str]:
+    """
+    Build IK search queries dynamically from the AO's own language.
+    No hardcoded query strings — AO allegations share vocabulary with
+    ITAT judgments, so using them directly produces far better matches.
+
+    Priority:
+      1. AO allegation text + section  (most specific)
+      2. AO rejection reason + section (what was rejected → find cases that overcame it)
+      3. Case facts + section           (general context)
+      4. Section-only fallback          (last resort)
+    """
+    queries = []
+
+    # Query 1 — AO's exact allegation language + section
+    if ao_allegations:
+        # Keep first 150 chars — IK keyword search, not full-text
+        core = ao_allegations[:150].strip()
+        queries.append(f"section {section} {core}")
+
+    # Query 2 — AO rejection reason → find cases that defeated this exact rejection
+    if ao_rejection_reason:
+        core = ao_rejection_reason[:120].strip()
+        queries.append(f"section {section} {core} penalty deleted assessee won")
+
+    # Query 3 — Case facts context
+    if case_facts and not queries:
+        core = case_facts[:120].strip()
+        queries.append(f"section {section} {core}")
+
+    # Fallback — section-only if no AO language available
+    if not queries:
+        queries = [
+            f"section {section} penalty deleted documents accepted ITAT",
+            f"section {section} assessee won evidence produced",
+        ]
+
+    return queries[:3]   # cap at 3 IK calls
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -387,6 +425,9 @@ def build_evidence_list(
     case_name: str = "",
     assessment_year: str = "",
     demand_amount: float = 0.0,
+    ao_allegations: str = "",
+    ao_rejection_reason: str = "",
+    ao_additions: list = None,
 ) -> list[dict]:
     """
     Build evidence list for all contested sections.
@@ -394,6 +435,8 @@ def build_evidence_list(
 
     Returns list of dicts compatible with add_evidence() in database/queries.py
     """
+    ao_additions = ao_additions or []
+
     def log(msg):
         if progress_cb:
             progress_cb(msg)
@@ -406,19 +449,77 @@ def build_evidence_list(
 
         embedder = EmbeddingService()
         if embedder.is_indexed():
-            log("🚀 Using RAG pipeline (hybrid vector + FTS5 + Gemini reranking)...")
+            log("🚀 Using RAG pipeline (hybrid vector + FTS5 + AI reranking)...")
             query = CaseQuery(
-                case_id         = case_id or 0,
-                sections        = [s for s in sections if not _is_procedural(s)],
-                client_facts    = case_facts or f"Case under sections {', '.join(sections)}",
-                ao_text         = ao_order_text,
-                demand_amount   = demand_amount,
-                case_name       = case_name,
-                assessment_year = assessment_year,
+                case_id             = case_id or 0,
+                sections            = [s for s in sections if not _is_procedural(s)],
+                client_facts        = case_facts or f"Case under sections {', '.join(sections)}",
+                ao_text             = ao_order_text,
+                ao_allegations      = ao_allegations,
+                ao_rejection_reason = ao_rejection_reason,
+                demand_amount       = demand_amount,
+                case_name           = case_name,
+                assessment_year     = assessment_year,
             )
             pipeline = RAGPipeline()
             strategy = pipeline.build(query, progress_cb=log)
             items = _strategy_to_items(strategy)
+
+            # Layer 2: documents grounded directly in retrieved cases
+            # (from documents_accepted field + key_ratio mining) — no AI imagination
+            if strategy.retrieved_cases:
+                log("📎 Extracting case-grounded documents from matched precedents...")
+                grounded = RAGPipeline.extract_docs_from_cases(
+                    strategy.retrieved_cases, query
+                )
+                # Merge: grounded items that aren't already covered
+                existing_keys = {i["document_name"].lower()[:50] for i in items}
+                new_grounded  = [
+                    g for g in grounded
+                    if g["document_name"].lower()[:50] not in existing_keys
+                ]
+                if new_grounded:
+                    items.extend(new_grounded)
+                    log(f"  ✅ {len(new_grounded)} case-grounded item(s) added")
+
+            # ── Per-section internet fallback for any section RAG missed ─────
+            contested = [s for s in sections if not _is_procedural(s)]
+            covered   = {item["section"] for item in items}
+            missing   = [s for s in contested if s not in covered]
+            if missing:
+                log(f"⚠️  RAG returned 0 evidence for: {', '.join(f'§{s}' for s in missing)}")
+                log("🌐 Running internet search for missing sections...")
+                for section in missing:
+                    log(f"\n─── §{section} (internet fallback) ────────────────────────────")
+                    db_snippets          = _get_db_snippets(section)
+                    ik_results           = _search_ik(
+                        section, log,
+                        ao_allegations      = ao_allegations,
+                        ao_rejection_reason = ao_rejection_reason,
+                        case_facts          = case_facts,
+                    )
+                    mined_docs, web_results = _search_and_mine(section, case_facts, log)
+                    fallback_items       = _synthesize(
+                        section, db_snippets, ik_results, web_results,
+                        mined_docs, [], case_facts, log,
+                    )
+                    items.extend(fallback_items)
+                    log(f"  ✅ §{section}: {len(fallback_items)} item(s) from internet search")
+
+            # Apply feedback boosts from historical CA outcomes
+            items = _apply_feedback_boosts(items, sections, log)
+
+            # Allegation-targeted layer — counter specific AO objections
+            if ao_allegations or ao_additions:
+                log("\n🎯 Building allegation-targeted evidence...")
+                targeted = _build_allegation_targeted_items(
+                    sections, ao_allegations, ao_rejection_reason,
+                    ao_additions, case_facts, log,
+                )
+                if targeted:
+                    items.extend(targeted)
+                    log(f"  ✅ {len(targeted)} allegation-targeted item(s) added")
+
             # Add procedural placeholders
             items.extend(_procedural_placeholders(sections))
             return items
@@ -461,8 +562,13 @@ def build_evidence_list(
         db_snippets = _get_db_snippets(section)
         log(f"  ✓ Local DB: {len(db_snippets)} snippet(s)")
 
-        # Step 2 — IK direct scrape
-        ik_results = _search_ik(section, log)
+        # Step 2 — IK direct scrape (query built from AO language, not hardcoded)
+        ik_results = _search_ik(
+            section, log,
+            ao_allegations      = ao_allegations,
+            ao_rejection_reason = ao_rejection_reason,
+            case_facts          = case_facts,
+        )
         log(f"  ✓ IK direct: {len(ik_results)} case(s)")
 
         # Step 3 — Internet search + page mining
@@ -476,6 +582,17 @@ def build_evidence_list(
         )
         all_items.extend(items)
         log(f"  ✅ §{section}: {len(items)} evidence item(s) generated")
+
+    # Allegation-targeted layer
+    if ao_allegations or ao_additions:
+        log("\n🎯 Building allegation-targeted evidence...")
+        targeted = _build_allegation_targeted_items(
+            contested, ao_allegations, ao_rejection_reason,
+            ao_additions, case_facts, log,
+        )
+        if targeted:
+            all_items.extend(targeted)
+            log(f"  ✅ {len(targeted)} allegation-targeted item(s) added")
 
     # Add procedural placeholders
     all_items.extend(_procedural_placeholders(procedural))
@@ -492,6 +609,130 @@ def build_evidence_list(
     log(f"\n✅ Evidence build complete: {len(unique)} total item(s) "
         f"({len(contested)} contested + {len(procedural)} procedural sections)")
     return unique
+
+
+_ALLEGATION_SYSTEM = (
+    "You are a senior Indian tax advocate specialising in ITAT appeals. "
+    "You produce precise, actionable document lists that directly counter "
+    "specific Assessing Officer objections. Return ONLY valid JSON."
+)
+
+
+def _build_allegation_targeted_items(
+    sections: list[str],
+    ao_allegations: str,
+    ao_rejection_reason: str,
+    ao_additions: list,
+    case_facts: str,
+    log,
+) -> list[dict]:
+    """
+    For each AO addition / allegation, ask the AI what specific documents
+    the assessee should produce to directly counter *that exact objection*.
+
+    Returns evidence items tagged source='allegation-targeted' with
+    counter_allegation field so the UI can group them distinctly.
+    """
+    from ai.ai_client import AIClient
+
+    items: list[dict] = []
+
+    # Build per-section allegation blocks
+    # Prefer granular per-addition data; fall back to top-level allegation string
+    allegation_blocks: list[dict] = []
+
+    if ao_additions:
+        for add in ao_additions:
+            sec  = str(add.get("section", "")).strip()
+            desc = str(add.get("description", "")).strip()
+            amt  = add.get("amount", 0)
+            if sec and desc:
+                allegation_blocks.append({
+                    "section":   sec,
+                    "allegation": desc,
+                    "amount":    amt,
+                })
+
+    # If no per-section data, use the top-level strings against all sections
+    if not allegation_blocks and ao_allegations:
+        for sec in sections:
+            allegation_blocks.append({
+                "section":   sec,
+                "allegation": ao_allegations,
+                "amount":    0,
+            })
+
+    if not allegation_blocks:
+        return []
+
+    # One AI call per allegation block (usually 1-3 additions per AO order)
+    for block in allegation_blocks[:5]:   # cap at 5 to avoid token bloat
+        sec        = block["section"]
+        allegation = block["allegation"][:500]
+        amount_str = f"₹{block['amount']:,.0f}" if block.get("amount") else ""
+
+        rejection_ctx = (
+            f"\nAO's rejection of assessee's earlier explanation: {ao_rejection_reason[:300]}"
+            if ao_rejection_reason else ""
+        )
+
+        prompt = f"""CASE FACTS:
+{case_facts[:400]}
+
+AO ALLEGATION (§{sec}{' — ' + amount_str if amount_str else ''}):
+{allegation}
+{rejection_ctx}
+
+TASK:
+The Assessing Officer made the above specific allegation/addition.
+List 5–7 documents the assessee MUST produce to directly counter THIS exact allegation.
+
+Rules:
+- Each document must directly address the allegation, not just §{sec} in general
+- If AO rejected an explanation, include documents that fix that exact gap
+- Include WHERE the document comes from (client's own records / bank / registrar / etc.)
+- Include WHY it defeats the specific allegation in one sentence
+
+Return JSON array:
+[
+  {{
+    "document_name":    "Exact document name",
+    "mandatory":        true,
+    "why_it_matters":   "Directly counters the allegation because...",
+    "how_to_obtain":    "Source — one practical sentence",
+    "counter_point":    "Which part of AO's allegation this demolishes"
+  }}
+]
+No other text."""
+
+        raw    = AIClient.call(_ALLEGATION_SYSTEM, prompt, temperature=0.05, max_tokens=1500)
+        parsed = AIClient.parse_json(raw)
+
+        if not isinstance(parsed, list):
+            log(f"  ⚠ Allegation AI failed for §{sec} — skipping")
+            continue
+
+        for obj in parsed:
+            if not isinstance(obj, dict) or not obj.get("document_name"):
+                continue
+            items.append({
+                "section":             sec,
+                "document_name":       str(obj["document_name"]).strip(),
+                "win_boost":           25,
+                "mandatory":           bool(obj.get("mandatory", True)),
+                "tribunal_verdict":    "accepted",
+                "rejection_reason":    "",
+                "accepted_in":         [],
+                "rejected_in":         [],
+                "acceptance_count":    1,
+                "why_it_matters":      str(obj.get("why_it_matters", "")),
+                "how_to_obtain":       str(obj.get("how_to_obtain", "")),
+                "counter_point":       str(obj.get("counter_point", "")),
+                "counter_allegation":  allegation[:200],
+                "source":              "allegation-targeted",
+            })
+
+    return items
 
 
 def _procedural_placeholders(sections: list[str]) -> list[dict]:
@@ -562,14 +803,25 @@ def _get_db_snippets(section: str) -> list[str]:
 # Source 3 — Indian Kanoon direct scrape
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _search_ik(section: str, log) -> list[dict]:
+def _search_ik(
+    section: str,
+    log,
+    ao_allegations: str = "",
+    ao_rejection_reason: str = "",
+    case_facts: str = "",
+) -> list[dict]:
     """
-    Search IK directly (no API key), fetch full text of top results.
+    Search IK using AO's own language — no hardcoded query strings.
     Returns list of {title, headline, full_text, url, tid}
     """
     results    = []
     seen_tids  = set()
-    queries_list = _IK_QUERIES.get(section, _default_ik_queries(section))
+    queries_list = _build_ik_queries(
+        section,
+        ao_allegations      = ao_allegations,
+        ao_rejection_reason = ao_rejection_reason,
+        case_facts          = case_facts,
+    )
 
     try:
         from ai.indian_kanoon import search_cases, clean_html, get_doc
@@ -855,18 +1107,17 @@ Return ONLY a JSON array. Each object must have exactly these keys:
 Return the JSON array only. No other text."""
 
     try:
-        from ai.gemini_client import call_gemini
-        raw = call_gemini(
+        from ai.ai_client import AIClient
+        raw = AIClient.call(
             _SYNTHESIS_SYSTEM,
             prompt,
             temperature=0.05,
             max_tokens=4096,
-            redact=False,
         )
 
-        # Check for Gemini error response
-        if not raw or raw.startswith("[ERROR]"):
-            log(f"  ⚠ Gemini full synthesis failed ({raw[:60]}) — trying mini synthesis...")
+        # Check for error response
+        if AIClient.is_error(raw):
+            log(f"  ⚠ AI full synthesis failed ({raw[:60]}) — trying mini synthesis...")
             mini = _mini_synthesis(section, ik_results, db_snippets, mined_docs, log)
             if mini:
                 return mini
@@ -961,7 +1212,7 @@ def _mini_synthesis(section: str, ik_results: list[dict],
     Falls back gracefully if Gemini still unavailable.
     """
     try:
-        from ai.gemini_client import call_gemini
+        from ai.ai_client import AIClient
 
         # Build compact context — headlines only
         hl_lines = []
@@ -994,12 +1245,11 @@ Return ONLY a JSON array like:
 [{{"document_name":"Bank Statement","mandatory":true,"why_it_matters":"Proves source of funds","how_to_obtain":"From bank"}}]
 No other text."""
 
-        raw = call_gemini(
+        raw = AIClient.call(
             "You are an Indian tax lawyer. Return only JSON arrays.",
             mini_prompt,
             temperature=0.1,
             max_tokens=1024,
-            redact=False,
         )
 
         if not raw or raw.startswith("[ERROR]"):
@@ -1149,6 +1399,40 @@ def _mined_to_items(section: str, mined_docs: list[dict]) -> list[dict]:
 # ─────────────────────────────────────────────────────────────────────────────
 # RAG CaseStrategy → flat item list (unchanged)
 # ─────────────────────────────────────────────────────────────────────────────
+
+def _apply_feedback_boosts(items: list[dict], sections: list[str], log) -> list[dict]:
+    """
+    Query historical CA outcome data and boost win_boost / acceptance_count
+    for documents that were consistently accepted at ITAT hearings.
+    Also demotes documents that were consistently rejected.
+    """
+    try:
+        from database.queries import get_feedback_stats
+        for section in sections:
+            stats = get_feedback_stats(section)
+            if not stats:
+                continue
+            section_items = [i for i in items if i.get("section") == section]
+            if not section_items:
+                continue
+            boosted = 0
+            for item in section_items:
+                doc_key = item.get("document_name", "").strip().lower()
+                for stat_name, stat in stats.items():
+                    if stat_name.strip().lower() == doc_key:
+                        fb_boost = stat.get("boost", 0)
+                        if fb_boost > 0:
+                            item["win_boost"]        = min(50, item.get("win_boost", 0) + fb_boost)
+                            item["acceptance_count"] = item.get("acceptance_count", 1) + stat.get("accepted", 0)
+                            boosted += 1
+                        elif stat.get("rejected", 0) > stat.get("accepted", 0):
+                            item["win_boost"] = max(0, item.get("win_boost", 5) - 10)
+            if boosted:
+                log(f"  📊 §{section}: feedback applied to {boosted} item(s)")
+    except Exception:
+        pass
+    return items
+
 
 def _strategy_to_items(strategy) -> list[dict]:
     """Convert a CaseStrategy (from RAGPipeline) into flat evidence item list."""

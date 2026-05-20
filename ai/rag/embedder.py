@@ -408,35 +408,33 @@ class EmbeddingService:
         """
         Query one collection.
         Returns list of {id, score, metadata} dicts, sorted by score desc.
+
+        NOTE: section_filter is applied in Python AFTER retrieval.
+        ChromaDB's HNSW metadata filtering throws "Error finding id" when
+        the filtered result set is smaller than n_results — avoid it entirely.
         """
         col = self._get_collection(collection_name)
-
-        where = None
-        if section_filter and len(section_filter) == 1:
-            where = {"section": {"$eq": section_filter[0]}}
-        elif section_filter:
-            where = {"section": {"$in": section_filter}}
 
         count = col.count()
         if count == 0:
             return []
 
-        kwargs: dict = {
-            "query_embeddings": [query_embedding],
-            "n_results":        min(top_k, count),
-            "include":          ["distances", "metadatas"],
-        }
-        if where:
-            kwargs["where"] = where
+        # Fetch a larger pool so post-filter still yields enough results.
+        # If no section filter, fetch exactly what's needed.
+        fetch_k = min(top_k * 4 if section_filter else top_k, count)
 
-        result = col.query(**kwargs)
+        result = col.query(
+            query_embeddings=[query_embedding],
+            n_results=fetch_k,
+            include=["distances", "metadatas"],
+        )
 
         ids        = result["ids"][0]
         distances  = result["distances"][0]
         metadatas  = result["metadatas"][0]
 
-        # ChromaDB cosine distance → similarity: score = 1 - distance
-        return [
+        # Build result list
+        rows = [
             {
                 "id":       int(id_),
                 "score":    round(1.0 - float(dist), 6),
@@ -444,6 +442,18 @@ class EmbeddingService:
             }
             for id_, dist, meta in zip(ids, distances, metadatas)
         ]
+
+        # Post-filter by section if requested
+        if section_filter:
+            section_set = {s.upper() for s in section_filter}
+            filtered = [
+                r for r in rows
+                if r["metadata"].get("section", "").upper() in section_set
+            ]
+            # If filter was too aggressive (empty result), return unfiltered top-k
+            rows = filtered if filtered else rows
+
+        return rows[:top_k]
 
     # ── Text builders (3 aspects per case) ───────────────────────────────────
 

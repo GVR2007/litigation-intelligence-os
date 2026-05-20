@@ -240,7 +240,71 @@ def _show_pii_status(scan: dict):
 # ── Register Case Tab ─────────────────────────────────────────────────────────
 
 def _render_register_form(scan: dict, detected: list):
-    """Case registration form (pre-filled from scan)."""
+    """Case registration form (pre-filled from scan + AI extraction)."""
+
+    # Show extracted facts preview if available
+    case_facts_extracted  = scan.get("case_facts", "")
+    ao_allegations        = scan.get("ao_allegations", "")
+    additions             = scan.get("additions", [])
+    segments_detected     = scan.get("segments_detected", [])
+    extraction_warning    = scan.get("extraction_warning", "")
+    ocr_required          = scan.get("ocr_required", False)
+    doc_heading           = scan.get("document_heading", "")
+    doc_summary           = scan.get("doc_summary", "")
+    notice_requirements   = scan.get("notice_requirements", [])
+
+    # ── Document heading banner — shown for all document types ────────────────
+    if doc_heading:
+        st.info(f"📄 **{doc_heading}**" +
+                (f"  \n_{doc_summary}_" if doc_summary else ""))
+
+    # ── Scanned PDF warning — shown before the form ───────────────────────────
+    if ocr_required or extraction_warning:
+        st.error(
+            "⚠️ **Scanned PDF detected — text could not be extracted automatically.**\n\n"
+            + (extraction_warning or "Upload a text-based PDF for auto-extraction to work.")
+            + "\n\nYou can still register the case manually below."
+        )
+
+    # ── Notice requirements — shown prominently when present ─────────────────
+    if notice_requirements:
+        with st.expander(
+            f"📋 **{len(notice_requirements)} specific items requested by authority** "
+            f"— expand to see full list",
+            expanded=True,
+        ):
+            st.caption(
+                "These are the exact items the authority has asked you to produce. "
+                "Phase 2 will build your response checklist around these."
+            )
+            for i, req in enumerate(notice_requirements, 1):
+                st.markdown(f"**{i}.** {req}")
+
+    if case_facts_extracted or additions:
+        with st.expander("🤖 AI-Extracted Facts — review before registering",
+                         expanded=not notice_requirements):
+            if segments_detected:
+                st.caption(f"✅ Segments detected: {', '.join(segments_detected)}")
+            else:
+                st.caption("ℹ️ No structural segments detected — full-text extraction used")
+
+            if case_facts_extracted:
+                st.markdown("**Case Facts (auto-extracted):**")
+                st.info(case_facts_extracted)
+
+            if ao_allegations:
+                st.markdown("**AO Allegations / Contentions:**")
+                st.warning(ao_allegations)
+
+            if additions:
+                st.markdown("**Additions / Penalties detected:**")
+                for add in additions:
+                    sec    = add.get("section", "?")
+                    amount = add.get("amount", 0)
+                    desc   = add.get("description", "")
+                    amt_str = f"₹{amount:,.0f}" if amount else "Amount unclear"
+                    st.markdown(f"- **§{sec}** — {amt_str} — {desc[:120]}")
+
     with st.form("new_case_form", clear_on_submit=False):
         case_name = st.text_input(
             "Case Title *",
@@ -278,6 +342,16 @@ def _render_register_form(scan: dict, detected: list):
             min_value=0.0,
             step=1000.0,
         )
+
+        # Editable case facts — pre-filled from AI extraction, user can refine
+        case_facts_input = st.text_area(
+            "Case Facts *",
+            value=case_facts_extracted,
+            height=120,
+            placeholder="Describe what happened: nature of transaction, what AO disputed, what assessee claimed. This drives the AI evidence engine.",
+            help="Auto-extracted from the AO order. Edit to add context. This is used by the Evidence Engine to find matching precedents.",
+        )
+
         hearing_date = st.date_input("Next Hearing Date (optional)", value=None)
 
         st.markdown("**Violated Sections** — auto-detected. Add any missed:")
@@ -309,10 +383,30 @@ def _render_register_form(scan: dict, detected: list):
             final_sections, demand_amount, hearing_str,
             client_role=st.session_state.get("client_role", "assessee"),
         )
-        st.session_state["active_case_id"]   = case_id
-        st.session_state["active_case_name"] = case_name
-        st.session_state.pop("pdf_scan_result", None)
-        st.session_state.pop("pdf_last_filename", None)
+
+        # Store extracted facts in session for Evidence Engine to pick up
+        st.session_state["active_case_id"]                    = case_id
+        st.session_state["active_case_name"]                   = case_name
+        st.session_state[f"case_facts_{case_id}"]              = case_facts_input.strip()
+        st.session_state[f"ao_text_{case_id}"]                 = scan.get("raw_text", "")[:8000]
+        st.session_state[f"ao_allegations_{case_id}"]          = scan.get("ao_allegations", "")
+        st.session_state[f"ao_rejection_reason_{case_id}"]     = scan.get("ao_rejection_reason", "")
+        st.session_state[f"ao_additions_{case_id}"]            = scan.get("additions", [])
+        st.session_state[f"doc_heading_{case_id}"]             = scan.get("document_heading", "")
+        st.session_state[f"notice_requirements_{case_id}"]     = scan.get("notice_requirements", [])
+
+        # Persist full document context to DB — survives browser refresh / session loss
+        queries.save_ao_context(
+            case_id,
+            ao_allegations      = scan.get("ao_allegations", ""),
+            ao_rejection_reason = scan.get("ao_rejection_reason", ""),
+            ao_additions        = scan.get("additions", []),
+            doc_heading         = scan.get("document_heading", ""),
+            notice_requirements = scan.get("notice_requirements", []),
+        )
+
+        st.session_state.pop("pdf_scan_result",    None)
+        st.session_state.pop("pdf_last_filename",  None)
         st.success(f"✅ Case registered — ID #{case_id} with {len(final_sections)} section(s).")
         st.balloons()
 

@@ -17,7 +17,7 @@ import json
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from database import queries
 from utils.helpers import parse_sections, format_currency
-from ai.gemini_client import call_gemini, stream_gemini
+from ai.openrouter_client import call_openrouter as call_gemini
 
 
 _SUBMISSION_SYSTEM = """You are a senior Indian Income Tax advocate with 25 years of ITAT
@@ -305,9 +305,22 @@ def _render_submission_drafter(case_id, case, sections, evidence, args):
 
     # ── Saved draft display ───────────────────────────────────────────────────
     draft_key = f"submission_draft_{case_id}"
-    if st.session_state.get(draft_key):
+
+    # Auto-clear stale error drafts so they don't block the UI
+    cached = st.session_state.get(draft_key, "")
+    if cached and str(cached).startswith("[ERROR]"):
+        del st.session_state[draft_key]
+        cached = ""
+
+    if cached:
         st.divider()
         st.subheader("📋 Draft Submissions")
+
+        col_redraft, _ = st.columns([1, 4])
+        with col_redraft:
+            if st.button("🔄 Re-draft", key=f"redraft_{case_id}", use_container_width=True):
+                del st.session_state[draft_key]
+                st.rerun()
 
         draft = st.session_state[draft_key]
 
@@ -441,15 +454,8 @@ Draft in full — do not abbreviate or summarize. This is the actual filing docu
     full_text   = ""
 
     with st.spinner(f"✍️ Drafting {submission_type}..."):
-        try:
-            for chunk in stream_gemini(_SUBMISSION_SYSTEM, prompt,
-                                        max_tokens=6000, temperature=0.1):
-                full_text += chunk
-                placeholder.text_area("Drafting...", value=full_text + "▌",
-                                       height=400, key=f"stream_{case_id}_{len(full_text)%100}")
-        except Exception as e:
-            full_text = call_gemini(_SUBMISSION_SYSTEM, prompt,
-                                     max_tokens=6000, temperature=0.1)
+        full_text = call_gemini(_SUBMISSION_SYSTEM, prompt,
+                                max_tokens=6000, temperature=0.1)
 
     st.session_state[draft_key] = full_text
     placeholder.empty()
@@ -610,12 +616,16 @@ Use formal language. No verbose introductions."""
 
         st.session_state[f"synopsis_{case_id}"] = result
 
-    if st.session_state.get(f"synopsis_{case_id}"):
-        synopsis = st.session_state[f"synopsis_{case_id}"]
+    syn_key = f"synopsis_{case_id}"
+    if st.session_state.get(syn_key, "").startswith("[ERROR]"):
+        del st.session_state[syn_key]
+
+    if st.session_state.get(syn_key):
+        synopsis = st.session_state[syn_key]
         st.divider()
         edited_synopsis = st.text_area("Review and edit:", value=synopsis,
                                         height=400, key=f"syn_editor_{case_id}")
-        st.session_state[f"synopsis_{case_id}"] = edited_synopsis
+        st.session_state[syn_key] = edited_synopsis
 
         col_a, col_b = st.columns(2)
         with col_a:

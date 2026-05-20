@@ -10,6 +10,41 @@ from ai.claude_client import call_claude
 from ai.prompts import EVIDENCE_SYSTEM
 
 
+def _get_ao_context(case_id: int) -> dict:
+    """
+    Return AO allegation data for a case, with DB fallback if session state is empty.
+
+    Priority:
+      1. session_state — already in memory (same session as Phase 1)
+      2. DB            — persisted at registration; survives browser refresh
+
+    Always returns a dict with keys: ao_allegations, ao_rejection_reason, ao_additions.
+    Also repopulates session_state from DB when loaded that way (prevents repeat DB reads).
+    """
+    allegations = st.session_state.get(f"ao_allegations_{case_id}", "")
+    rejection   = st.session_state.get(f"ao_rejection_reason_{case_id}", "")
+    additions   = st.session_state.get(f"ao_additions_{case_id}", None)
+
+    # If any field is missing from session state, load all from DB
+    if not allegations and not rejection and additions is None:
+        ctx = queries.get_ao_context(case_id)
+        # Repopulate session state so subsequent reads don't hit the DB again
+        st.session_state[f"ao_allegations_{case_id}"]      = ctx["ao_allegations"]
+        st.session_state[f"ao_rejection_reason_{case_id}"] = ctx["ao_rejection_reason"]
+        st.session_state[f"ao_additions_{case_id}"]        = ctx["ao_additions"]
+        st.session_state[f"doc_heading_{case_id}"]         = ctx.get("doc_heading", "")
+        st.session_state[f"notice_requirements_{case_id}"] = ctx.get("notice_requirements", [])
+        return ctx
+
+    return {
+        "ao_allegations":      allegations,
+        "ao_rejection_reason": rejection,
+        "ao_additions":        additions if additions is not None else [],
+        "doc_heading":         st.session_state.get(f"doc_heading_{case_id}", ""),
+        "notice_requirements": st.session_state.get(f"notice_requirements_{case_id}", []),
+    }
+
+
 def render():
     st.header("Phase 2: Evidence Engine")
     st.caption("Auto-generates your evidence checklist from Indian Kanoon, itatonline, TaxGuru, Taxscan, CBDT + AI.")
@@ -49,8 +84,9 @@ def render():
         return
 
     # ── Tabs ─────────────────────────────────────────────────────────────────
-    tab1, tab2, tab3 = st.tabs([
+    tab1, tab2, tab3, tab4 = st.tabs([
         "📋 Evidence Checklist",
+        "🎯 AO Allegations",
         "🔄 Backup Plan",
         "🔍 AI Validation",
     ])
@@ -59,9 +95,12 @@ def render():
         _render_evidence_list(case_id, sections, case)
 
     with tab2:
-        _render_backup_plan(case_id, sections)
+        _render_allegation_tab(case_id, sections, case)
 
     with tab3:
+        _render_backup_plan(case_id, sections)
+
+    with tab4:
         _render_ai_validation(case_id, sections)
 
 
@@ -84,37 +123,71 @@ def _auto_build(case_id: int, sections: list, case: dict):
         log_lines.append(msg)
         log_box.code("\n".join(log_lines[-25:]), language="bash")
 
-    ao_text    = st.session_state.get("pdf_scan_result", {}).get("raw_text", "") or ""
+    ao_text = (
+        st.session_state.get(f"ao_text_{case_id}")
+        or st.session_state.get("pdf_scan_result", {}).get("raw_text", "")
+        or ""
+    )
 
-    # Rich case facts — the more context, the better the RAG match
-    facts_parts = []
-    if case.get("case_name"):
-        facts_parts.append(f"Client/case name: {case['case_name']}")
-    if case.get("assessment_year"):
-        facts_parts.append(f"Assessment year: {case['assessment_year']}")
-    if case.get("demand_amount"):
-        facts_parts.append(f"Demand amount: ₹{case['demand_amount']:,.0f}")
-    if case.get("nature_of_addition"):
-        facts_parts.append(f"Nature of addition: {case['nature_of_addition']}")
-    if case.get("assessee_type"):
-        facts_parts.append(f"Assessee type: {case['assessee_type']}")
-    if case.get("remarks"):
-        facts_parts.append(f"Additional facts: {case['remarks']}")
-    facts_parts.append(f"Sections under dispute: {', '.join(f'§{s}' for s in sections)}")
+    # Load full document context once — session state first, DB fallback on refresh
+    ao_ctx = _get_ao_context(case_id)
 
-    case_facts = ". ".join(facts_parts)
+    # ── Layer 0: seed notice requirements as mandatory items BEFORE RAG ───────
+    # These are the exact items the authority wrote in the notice/annexure.
+    # They are ground truth — AO directly demanded them. RAG adds on top.
+    notice_reqs = ao_ctx.get("notice_requirements", [])
+    if notice_reqs:
+        log(f"📋 Seeding {len(notice_reqs)} items directly from notice (Layer 0)...")
+        for req in notice_reqs:
+            queries.add_evidence(
+                case_id,
+                section       = sections[0] if sections else "",
+                document_name = req,
+                win_boost     = 50,   # highest priority — AO directly asked for this
+                is_mandatory  = True,
+                status        = "pending",
+                why_it_matters= "AO/authority directly requested this item in the notice.",
+                how_to_obtain = "",   # CA knows their client's records
+                tribunal_verdict = "requested",
+                source        = "notice-requirement",
+                notes         = ao_ctx.get("doc_heading", ""),
+            )
+        log(f"   ✅ Layer 0 complete — {len(notice_reqs)} mandatory items added")
+
+    # Prefer AI-extracted case facts from Phase 1; fall back to assembled parts
+    case_facts = st.session_state.get(f"case_facts_{case_id}", "").strip()
+
+    if not case_facts:
+        facts_parts = []
+        if case.get("case_name"):
+            facts_parts.append(f"Client/case name: {case['case_name']}")
+        if case.get("assessment_year"):
+            facts_parts.append(f"Assessment year: {case['assessment_year']}")
+        if case.get("demand_amount"):
+            facts_parts.append(f"Demand amount: ₹{case['demand_amount']:,.0f}")
+        if case.get("nature_of_addition"):
+            facts_parts.append(f"Nature of addition: {case['nature_of_addition']}")
+        if case.get("assessee_type"):
+            facts_parts.append(f"Assessee type: {case['assessee_type']}")
+        if case.get("remarks"):
+            facts_parts.append(f"Additional facts: {case['remarks']}")
+        facts_parts.append(f"Sections under dispute: {', '.join(f'§{s}' for s in sections)}")
+        case_facts = ". ".join(facts_parts)
 
     from ai.evidence_builder import build_evidence_list
 
     items = build_evidence_list(
-        sections        = sections,
-        ao_order_text   = ao_text,
-        case_facts      = case_facts,
-        progress_cb     = log,
-        case_id         = case_id,
-        case_name       = case.get("case_name", ""),
-        assessment_year = case.get("assessment_year", ""),
-        demand_amount   = float(case.get("demand_amount") or 0),
+        sections            = sections,
+        ao_order_text       = ao_text,
+        case_facts          = case_facts,
+        progress_cb         = log,
+        case_id             = case_id,
+        case_name           = case.get("case_name", ""),
+        assessment_year     = case.get("assessment_year", ""),
+        demand_amount       = float(case.get("demand_amount") or 0),
+        ao_allegations      = ao_ctx["ao_allegations"],
+        ao_rejection_reason = ao_ctx["ao_rejection_reason"],
+        ao_additions        = ao_ctx["ao_additions"],
     )
 
     log_box.empty()
@@ -140,6 +213,8 @@ def _auto_build(case_id: int, sections: list, case: dict):
                 accepted_in       = accepted_in,
                 rejected_in       = rejected_in,
                 acceptance_count  = item.get("acceptance_count", 1),
+                source            = item.get("source", ""),
+                notes             = item.get("counter_point", ""),
             )
 
         st.session_state[f"ev_build_done_{case_id}"] = (
@@ -230,14 +305,75 @@ def _render_evidence_list(case_id: int, sections: list, case: dict):
 
     st.divider()
 
-    # ── Group by section, then split accepted vs rejected ─────────────────────
+    # ── Split Layer 0 (notice demands) from Layer 1 (RAG recommendations) ─────
+    layer0 = [i for i in evidence
+              if (i.get("evidence_source") or i.get("notes", "")).startswith("notice-requirement")
+              or i.get("tribunal_verdict") == "requested"]
+    layer1 = [i for i in evidence if i not in layer0]
+
+    # ── Layer 0: items the authority directly demanded ─────────────────────────
+    if layer0:
+        doc_heading = _get_ao_context(case_id).get("doc_heading", "")
+        heading_line = f"  •  *{doc_heading}*" if doc_heading else ""
+        st.markdown(
+            f"### 📋 Authority-Demanded Items{heading_line}",
+            unsafe_allow_html=False,
+        )
+        st.caption(
+            "These are the exact items written in the notice/annexure. "
+            "You MUST produce every one of them. "
+            "Layer 1 below adds supporting documents that strengthen your response."
+        )
+        collected = sum(1 for i in layer0 if i["status"] == "available")
+        st.progress(collected / len(layer0),
+                    text=f"{collected} / {len(layer0)} collected")
+
+        for rank, item in enumerate(layer0, 1):
+            status_icon = {"available": "✅", "pending": "⏳",
+                           "unavailable": "❌"}.get(item["status"], "⏳")
+            col_check, col_label, col_status = st.columns([0.5, 8, 1.5])
+            with col_check:
+                st.markdown(f"**{rank}.**")
+            with col_label:
+                st.markdown(
+                    f"<span style='background:#1a3a5c;color:#7ecfff;"
+                    f"padding:2px 8px;border-radius:4px;font-size:11px;"
+                    f"font-weight:600;'>📋 AO DEMANDED</span>  "
+                    f"**{item['document_name']}**",
+                    unsafe_allow_html=True,
+                )
+                if item.get("notes") and item["notes"] != item.get("evidence_source", ""):
+                    st.caption(item["notes"])
+            with col_status:
+                new_status = st.selectbox(
+                    "status",
+                    ["pending", "available", "unavailable"],
+                    index=["pending", "available", "unavailable"].index(
+                        item.get("status", "pending")),
+                    key=f"layer0_status_{item['id']}",
+                    label_visibility="collapsed",
+                )
+                if new_status != item.get("status"):
+                    queries.update_evidence_status(item["id"], new_status)
+                    st.rerun()
+
+        st.divider()
+
+    # ── Layer 1: RAG-recommended documents grouped by section ─────────────────
+    if layer1:
+        st.markdown("### ⚖️ RAG-Recommended Supporting Documents")
+        st.caption(
+            "Found by searching real ITAT / HC / SC judgments. "
+            "These strengthen your response to each notice item."
+        )
+
     by_section: dict[str, list] = {}
-    for item in evidence:
+    for item in layer1:
         by_section.setdefault(item["section"], []).append(item)
 
     for sec, items in by_section.items():
-        accepted = [i for i in items if i.get("tribunal_verdict", "accepted") == "accepted"]
-        rejected = [i for i in items if i.get("tribunal_verdict", "accepted") == "rejected"]
+        accepted    = [i for i in items if i.get("tribunal_verdict", "accepted") == "accepted"]
+        rejected    = [i for i in items if i.get("tribunal_verdict") == "rejected"]
         avail_count = sum(1 for i in items if i["status"] == "available")
 
         st.subheader(f"§ {sec}  —  {avail_count}/{len(items)} collected")
@@ -321,6 +457,26 @@ def _render_accepted_items(items: list):
                     queries.update_evidence_status(item["id"], new_status)
                     st.rerun()
 
+                # ── Post-hearing feedback ─────────────────────────────────
+                cur_outcome = item.get("user_outcome") or ""
+                outcome_opts = ["", "accepted", "partially_accepted", "rejected"]
+                outcome_labels = ["Post-hearing outcome…", "✅ Accepted", "🔶 Partial", "❌ Rejected"]
+                try:
+                    oidx = outcome_opts.index(cur_outcome)
+                except ValueError:
+                    oidx = 0
+                new_outcome = st.selectbox(
+                    "ITAT outcome",
+                    outcome_opts,
+                    index=oidx,
+                    format_func=lambda x: outcome_labels[outcome_opts.index(x)],
+                    key=f"out_{item['id']}",
+                    label_visibility="collapsed",
+                )
+                if new_outcome and new_outcome != cur_outcome:
+                    queries.update_evidence_outcome(item["id"], new_outcome)
+                    st.rerun()
+
         st.markdown("---")
 
 
@@ -364,6 +520,172 @@ def _render_rejected_items(items: list):
 # ─────────────────────────────────────────────────────────────────────────────
 # Tab 2 — Backup Plan
 # ─────────────────────────────────────────────────────────────────────────────
+
+def _render_allegation_tab(case_id: int, sections: list, case: dict):
+    """
+    Tab 2 — AO Allegations.
+    Shows each AO objection and the specific documents that counter it,
+    grouped by allegation rather than section.
+    """
+    st.subheader("AO Allegation → Counter-Evidence Map")
+    st.caption(
+        "Each AO allegation from the assessment order is mapped to documents "
+        "that directly demolish that specific objection — not just §-level lists."
+    )
+
+    # Load from session state; fall back to DB if session was lost after refresh
+    _ctx                 = _get_ao_context(case_id)
+    ao_allegations       = _ctx["ao_allegations"]
+    ao_rejection_reason  = _ctx["ao_rejection_reason"]
+    ao_additions         = _ctx["ao_additions"]
+
+    # ── Show what was extracted ───────────────────────────────────────────────
+    has_data = ao_allegations or ao_additions
+    if not has_data:
+        st.info(
+            "No AO allegation data found for this case.\n\n"
+            "**To enable this tab:** upload the AO order PDF in Phase 1 *before* registering "
+            "the case — the system will auto-extract allegations from the order text."
+        )
+        return
+
+    if ao_allegations:
+        with st.expander("📋 AO Allegations (raw extracted text)", expanded=False):
+            st.warning(ao_allegations)
+            if ao_rejection_reason:
+                st.error(f"**Why AO rejected assessee's explanation:** {ao_rejection_reason}")
+
+    # ── Per-section allegation blocks ─────────────────────────────────────────
+    if ao_additions:
+        st.markdown("### Additions Made by AO")
+        for i, add in enumerate(ao_additions):
+            sec    = add.get("section", "?")
+            amount = add.get("amount", 0)
+            desc   = add.get("description", "")
+            amt_str = f"₹{amount:,.0f}" if amount else "Amount unclear"
+            st.markdown(
+                f"**§{sec}** — {amt_str}  \n"
+                f"<small style='color:#c0392b;'>{desc[:200]}</small>",
+                unsafe_allow_html=True,
+            )
+        st.divider()
+
+    # ── Allegation-targeted evidence from DB ──────────────────────────────────
+    evidence     = queries.get_case_evidence(case_id)
+    targeted     = [e for e in evidence if e.get("evidence_source") == "allegation-targeted"
+                    or e.get("notes", "").startswith("counter:")]
+
+    # Fallback: filter by source stored in notes field
+    # (add_evidence stores source in notes if evidence_source col not present)
+    if not targeted:
+        targeted = [e for e in evidence
+                    if "allegation-targeted" in (e.get("notes") or "")]
+
+    if not targeted:
+        st.info(
+            "No allegation-targeted documents yet. "
+            "Click **Re-build Evidence** below to generate them for this case."
+        )
+        _render_rebuild_button(case_id, sections, case)
+        return
+
+    # Group by section, then by counter_allegation text
+    by_section: dict = {}
+    for item in targeted:
+        by_section.setdefault(item["section"], []).append(item)
+
+    for sec, items in by_section.items():
+        st.markdown(f"### §{sec} — Allegation-Targeted Documents")
+
+        for rank, item in enumerate(items, 1):
+            counter_point = item.get("notes") or ""
+            mandatory_tag = "🔴 MANDATORY" if item.get("is_mandatory") else "🔵 Targeted"
+
+            with st.container():
+                c1, c2, c3 = st.columns([0.5, 6, 2])
+
+                with c1:
+                    st.markdown(
+                        f"<div style='font-size:18px;font-weight:bold;color:#B71C1C;"
+                        f"text-align:center;padding-top:6px;'>#{rank}</div>",
+                        unsafe_allow_html=True,
+                    )
+                with c2:
+                    st.markdown(f"**{item['document_name']}**  `{mandatory_tag}`")
+                    if item.get("why_it_matters"):
+                        st.caption(f"⚖️ {item['why_it_matters']}")
+                    if item.get("how_to_obtain"):
+                        st.caption(f"📍 {item['how_to_obtain']}")
+                    if counter_point and counter_point != item.get("why_it_matters"):
+                        st.caption(f"🎯 Counters: _{counter_point[:180]}_")
+                with c3:
+                    status_opts = ["pending", "available", "unavailable"]
+                    cur_status  = item.get("status", "pending")
+                    try:
+                        idx = status_opts.index(cur_status)
+                    except ValueError:
+                        idx = 0
+                    new_status = st.selectbox(
+                        "Status",
+                        status_opts,
+                        index=idx,
+                        key=f"alleg_ev_{item['id']}",
+                        label_visibility="collapsed",
+                    )
+                    if new_status != cur_status:
+                        queries.update_evidence_status(item["id"], new_status)
+                        st.rerun()
+
+            st.markdown("---")
+
+    _render_rebuild_button(case_id, sections, case)
+
+
+def _render_rebuild_button(case_id: int, sections: list, case: dict):
+    st.divider()
+    if st.button("🔄 Re-build allegation evidence", key=f"rebuild_alleg_{case_id}"):
+        ao_text   = st.session_state.get(f"ao_text_{case_id}", "")
+        facts     = st.session_state.get(f"case_facts_{case_id}", "")
+        # DB fallback — works even after browser refresh
+        _rctx     = _get_ao_context(case_id)
+        alleg     = _rctx["ao_allegations"]
+        reject    = _rctx["ao_rejection_reason"]
+        adds      = _rctx["ao_additions"]
+
+        if not alleg and not adds:
+            st.error("No allegation data found for this case. "
+                     "Upload the AO order PDF in Phase 1 and re-register to enable this.")
+            return
+
+        with st.spinner("Generating allegation-targeted documents..."):
+            from ai.evidence_builder import _build_allegation_targeted_items
+            targeted = _build_allegation_targeted_items(
+                sections, alleg, reject, adds, facts, lambda m: None
+            )
+
+        if targeted:
+            for item in targeted:
+                queries.add_evidence(
+                    case_id,
+                    item["section"],
+                    item["document_name"],
+                    item["win_boost"],
+                    item["mandatory"],
+                    item["tribunal_verdict"],
+                    item["why_it_matters"],
+                    item["how_to_obtain"],
+                    source=item["source"],
+                    rejection_reason=item.get("rejection_reason", ""),
+                    accepted_in="",
+                    rejected_in="",
+                    acceptance_count=item.get("acceptance_count", 1),
+                    notes=item.get("counter_point", ""),
+                )
+            st.success(f"✅ {len(targeted)} allegation-targeted document(s) added.")
+            st.rerun()
+        else:
+            st.warning("AI returned no targeted documents — check allegation data.")
+
 
 def _render_backup_plan(case_id: int, sections: list):
     st.subheader("Backup Plan — Substitute Documents")

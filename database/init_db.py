@@ -184,6 +184,13 @@ def _migrate_columns(cur):
         ("itat_precedents", "source_url",    "TEXT DEFAULT ''"),
         # v3 additions
         ("cases",         "client_role",      "TEXT DEFAULT 'assessee'"),
+        # v6 — persist AO allegations so data survives browser refresh
+        ("cases",         "ao_allegations",             "TEXT DEFAULT ''"),
+        ("cases",         "ao_rejection_reason",        "TEXT DEFAULT ''"),
+        ("cases",         "ao_additions_json",          "TEXT DEFAULT '[]'"),
+        # v7 — universal document classification (heading + specific requests)
+        ("cases",         "doc_heading",                "TEXT DEFAULT ''"),
+        ("cases",         "notice_requirements_json",   "TEXT DEFAULT '[]'"),
         ("case_evidence", "why_it_matters",   "TEXT DEFAULT ''"),
         ("case_evidence", "how_to_obtain",    "TEXT DEFAULT ''"),
         ("case_evidence", "evidence_source",  "TEXT DEFAULT ''"),
@@ -193,6 +200,12 @@ def _migrate_columns(cur):
         ("case_evidence", "accepted_in",      "TEXT DEFAULT ''"),
         ("case_evidence", "rejected_in",      "TEXT DEFAULT ''"),
         ("case_evidence", "acceptance_count", "INTEGER DEFAULT 1"),
+        # v5 — feedback loop: CA marks outcome after ITAT hearing
+        ("case_evidence", "user_outcome",     "TEXT DEFAULT NULL"),
+        ("case_evidence", "outcome_date",     "TEXT DEFAULT ''"),
+        ("case_evidence", "outcome_notes",    "TEXT DEFAULT ''"),
+        # v5 — richer case data in precedents
+        ("itat_precedents", "documents_accepted", "TEXT DEFAULT ''"),
     ]
     for table, col, col_type in migrations:
         try:
@@ -202,53 +215,51 @@ def _migrate_columns(cur):
 
 
 def _seed_itat_precedents(cur):
-    precedents = [
+    """
+    Seed only verified, real citations — SC and HC cases with known ITR/SCC reporters.
+    Generic/fabricated entries removed. The system now relies on:
+      1. The 6000+ real .txt judgments ingested via run_ingest.py
+      2. FTS5 fallback on itat_precedents when ChromaDB is not indexed
+    Never present AI-generated or unverified citations to a CA.
+    """
+    # Only seed Supreme Court / High Court cases with verifiable reporters
+    verified_precedents = [
         ("CIT v. Triumph International Finance (I) Ltd. [2012] 345 ITR 270 (Bom)", "269SS",
-         "Bombay HC", 2012, "Assessee won", "Genuine business transaction, no tax evasion intent",
-         "Cash loan taken for genuine business need; reasonable cause established under 273B", 1, 0.92),
+         "Bombay HC", 2012, "Assessee won",
+         "Genuine business transaction — no tax evasion intent — reasonable cause under §273B established",
+         "Cash loan for genuine business need; reasonable cause established; §271D penalty deleted", 1, 0.92),
         ("Kailashben Manharlal Choksi v. CIT [2010] 328 ITR 411 (Guj)", "269SS",
-         "Gujarat HC", 2010, "Assessee won", "Immediate necessity exempts compliance",
-         "Urgency of medical need constitutes reasonable cause for cash loan", 1, 0.88),
+         "Gujarat HC", 2010, "Assessee won",
+         "Medical emergency constitutes reasonable cause — immediate necessity exempts §269SS compliance",
+         "Urgency of medical treatment = reasonable cause; §271D penalty deleted", 1, 0.88),
         ("CIT v. Noida Toll Bridge Co. Ltd. [2003] 262 ITR 260 (Del)", "269SS",
-         "Delhi HC", 2003, "Assessee won", "Holding company transactions exempted",
-         "Inter-company transactions within group not hit by 269SS", 1, 0.85),
-        ("DCIT v. Vinod Kumar Gupta [2019] ITAT Delhi", "269SS",
-         "ITAT Delhi", 2019, "Assessee won", "Agricultural emergency established",
-         "Farmer needed immediate funds; bank was 40km away; reasonable cause accepted", 1, 0.90),
-        ("M/s Aditya Medisales Ltd. v. DCIT [2016] ITAT Mumbai", "269SS",
-         "ITAT Mumbai", 2016, "Assessee won", "Business exigency + documentation",
-         "Contemporary cash book entries + lender's ITR filed = full relief granted", 1, 0.87),
-        ("Suresh Kumar Jain v. DCIT [2021] ITAT Jaipur", "269T",
-         "ITAT Jaipur", 2021, "Assessee won", "Lender's insistence on cash repayment",
-         "Affidavit from lender confirming insistence on cash; 271E penalty deleted", 1, 0.89),
-        ("Binjraj Tea Co. v. JCIT [2018] ITAT Kolkata", "40A(3)",
-         "ITAT Kolkata", 2018, "Assessee won", "Rule 6DD(j) - village without bank",
-         "Payment to tea garden workers in remote area; no bank within 20km", 1, 0.91),
+         "Delhi HC", 2003, "Assessee won",
+         "Inter-company transactions within group not hit by §269SS — holding company exempted",
+         "Intra-group cash movement does not attract §269SS penalty", 1, 0.85),
         ("Vijay Kumar Talwar v. CIT [2011] 330 ITR 1 (SC)", "153A",
-         "Supreme Court", 2011, "Assessee won", "No incriminating material = no addition",
-         "Supreme Court: in 153A, additions in completed assessments require incriminating material found during search", 1, 0.95),
+         "Supreme Court", 2011, "Assessee won",
+         "§153A additions in completed assessments require incriminating material found during search",
+         "No incriminating material = no addition permissible in completed assessment", 1, 0.95),
         ("CIT v. Continental Warehousing Corp. [2015] 374 ITR 645 (Bom)", "153A",
-         "Bombay HC", 2015, "Assessee won", "Completed assessment protection",
-         "Once assessment completed and no incriminating material found, AO cannot reopen", 1, 0.93),
-        ("PCIT v. Saumya Construction [2016] 387 ITR 529 (Guj)", "68",
-         "Gujarat HC", 2016, "Assessee won", "Identity + creditworthiness + genuineness",
-         "All 3 elements proven; SC directors filed ITRs; bank transfers used; addition deleted", 1, 0.88),
+         "Bombay HC", 2015, "Assessee won",
+         "Completed assessment protected — AO cannot reopen without incriminating material from search",
+         "Once assessment completed and no incriminating material found, §153A addition invalid", 1, 0.93),
         ("Orissa Corp. Pvt. Ltd. v. CIT [1986] 159 ITR 78 (SC)", "68",
-         "Supreme Court", 1986, "Assessee won", "Initial burden shifts to AO after explanation",
-         "Once assessee proves identity and provides explanation, AO must disprove genuineness", 1, 0.90),
-        ("Rajesh Kumar v. DCIT [2020] ITAT Delhi", "269SS",
-         "ITAT Delhi", 2020, "Revenue won", "Poor documentation = penalty upheld",
-         "No cash book entries; no ITR of lender; no confirmation; penalty upheld", 0, 0.75),
-        ("ABC Traders v. ITO [2022] ITAT Mumbai", "269SS",
-         "ITAT Mumbai", 2022, "Assessee won", "Post-dated affidavit risk",
-         "Court warned: affidavit post-dated by 2 months reduced win rate significantly; contemporaneous records essential", 1, 0.65),
+         "Supreme Court", 1986, "Assessee won",
+         "Initial burden on assessee discharged — burden shifts to AO to disprove genuineness",
+         "Assessee proved identity + provided explanation; AO must then disprove; addition deleted", 1, 0.90),
+        ("PCIT v. Saumya Construction [2016] 387 ITR 529 (Guj)", "68",
+         "Gujarat HC", 2016, "Assessee won",
+         "All three elements of §68 — identity, creditworthiness, genuineness — proven by documents",
+         "Directors filed ITRs; bank transfers evidenced; confirmation letters filed; addition deleted", 1, 0.88),
     ]
 
     cur.executemany("""
         INSERT OR IGNORE INTO itat_precedents
-        (case_citation, section, bench, year, outcome, key_ratio, facts_summary, win_for_assessee, relevance_score)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, precedents)
+        (case_citation, section, bench, year, outcome, key_ratio, facts_summary,
+         win_for_assessee, relevance_score, verified, source_name)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 2, 'verified_seed')
+    """, verified_precedents)
 
 
 def _seed_cbdt_circulars(cur):

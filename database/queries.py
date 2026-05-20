@@ -58,18 +58,19 @@ def update_case_status(case_id, status):
 def add_evidence(case_id, section, document_name, win_boost, is_mandatory,
                  status="pending", why_it_matters="", how_to_obtain="",
                  tribunal_verdict="accepted", rejection_reason="",
-                 accepted_in="", rejected_in="", acceptance_count=1):
+                 accepted_in="", rejected_in="", acceptance_count=1,
+                 source="", notes=""):
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("""
         INSERT OR IGNORE INTO case_evidence
         (case_id, section, document_name, win_boost, is_mandatory, status,
          why_it_matters, how_to_obtain, tribunal_verdict, rejection_reason,
-         accepted_in, rejected_in, acceptance_count)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         accepted_in, rejected_in, acceptance_count, evidence_source, notes)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (case_id, section, document_name, win_boost, int(is_mandatory), status,
           why_it_matters, how_to_obtain, tribunal_verdict, rejection_reason,
-          accepted_in, rejected_in, acceptance_count))
+          accepted_in, rejected_in, acceptance_count, source, notes))
     conn.commit()
     conn.close()
 
@@ -97,6 +98,136 @@ def update_evidence_status(evidence_id, status):
                  (status, evidence_id))
     conn.commit()
     conn.close()
+
+
+def update_evidence_outcome(evidence_id: int, outcome: str, notes: str = "") -> None:
+    """
+    Record CA's post-hearing outcome for an evidence item.
+    outcome: 'accepted' | 'rejected' | 'partially_accepted'
+    """
+    from datetime import datetime
+    conn = get_connection()
+    conn.execute(
+        """UPDATE case_evidence
+           SET user_outcome = ?, outcome_date = ?, outcome_notes = ?
+           WHERE id = ?""",
+        (outcome, datetime.utcnow().date().isoformat(), notes, evidence_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_feedback_stats(section: str) -> dict:
+    """
+    Aggregate feedback for a section so the RAG pipeline can boost
+    documents that were historically accepted at ITAT.
+    Returns {document_name: {accepted: N, rejected: M, total: T, boost: 0-30}}
+    """
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """SELECT document_name, user_outcome, COUNT(*) as cnt
+           FROM case_evidence
+           WHERE section = ? AND user_outcome IS NOT NULL
+           GROUP BY document_name, user_outcome""",
+        (section,),
+    )
+    rows = cur.fetchall()
+    conn.close()
+
+    stats: dict = {}
+    for row in rows:
+        doc = row["document_name"]
+        if doc not in stats:
+            stats[doc] = {"accepted": 0, "rejected": 0, "partially_accepted": 0, "total": 0}
+        outcome = row["user_outcome"] or "rejected"
+        if outcome in stats[doc]:
+            stats[doc][outcome] += row["cnt"]
+        stats[doc]["total"] += row["cnt"]
+
+    for doc, s in stats.items():
+        accept_rate = (s["accepted"] + s["partially_accepted"] * 0.5) / max(s["total"], 1)
+        s["boost"] = min(30, int(accept_rate * 30))
+
+    return stats
+
+
+# ── AO Context persistence ────────────────────────────────────────────────────
+
+def save_ao_context(case_id: int, ao_allegations: str,
+                    ao_rejection_reason: str, ao_additions: list,
+                    doc_heading: str = "",
+                    notice_requirements: list | None = None) -> None:
+    """
+    Persist document context extracted from the uploaded PDF into the cases table.
+    Covers both AO order context (allegations, additions) and notice context
+    (document heading, specific numbered requests).
+    Called once at case registration — survives browser refresh / session loss.
+    """
+    conn = get_connection()
+    conn.execute(
+        """UPDATE cases
+           SET ao_allegations             = ?,
+               ao_rejection_reason        = ?,
+               ao_additions_json          = ?,
+               doc_heading                = ?,
+               notice_requirements_json   = ?,
+               updated_at                 = CURRENT_TIMESTAMP
+           WHERE id = ?""",
+        (ao_allegations or "",
+         ao_rejection_reason or "",
+         json.dumps(ao_additions if isinstance(ao_additions, list) else []),
+         doc_heading or "",
+         json.dumps(notice_requirements if isinstance(notice_requirements, list) else []),
+         case_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_ao_context(case_id: int) -> dict:
+    """
+    Load persisted document context for a case.
+    Returns dict with all keys always present — empty strings / empty lists if not saved.
+
+    Keys:
+      ao_allegations, ao_rejection_reason, ao_additions  — from AO order
+      doc_heading, notice_requirements                    — from notice/classification
+    """
+    conn = get_connection()
+    cur  = conn.cursor()
+    cur.execute(
+        """SELECT ao_allegations, ao_rejection_reason, ao_additions_json,
+                  doc_heading, notice_requirements_json
+           FROM cases WHERE id = ?""",
+        (case_id,),
+    )
+    row = cur.fetchone()
+    conn.close()
+
+    if not row:
+        return {"ao_allegations": "", "ao_rejection_reason": "",
+                "ao_additions": [], "doc_heading": "", "notice_requirements": []}
+
+    additions: list = []
+    try:
+        additions = json.loads(row["ao_additions_json"] or "[]") or []
+    except Exception:
+        pass
+
+    requirements: list = []
+    try:
+        requirements = json.loads(row["notice_requirements_json"] or "[]") or []
+    except Exception:
+        pass
+
+    return {
+        "ao_allegations":      row["ao_allegations"]      or "",
+        "ao_rejection_reason": row["ao_rejection_reason"] or "",
+        "ao_additions":        additions,
+        "doc_heading":         row["doc_heading"]          or "",
+        "notice_requirements": requirements,
+    }
 
 
 def get_citations_by_section(section: str, limit: int = 10,
