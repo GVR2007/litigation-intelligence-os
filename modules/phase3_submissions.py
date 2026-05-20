@@ -17,6 +17,7 @@ import json
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from database import queries
 from utils.helpers import parse_sections, format_currency
+from utils.rag_context import get_grounded_context
 from ai.openrouter_client import call_openrouter as call_gemini
 
 
@@ -386,10 +387,13 @@ def _draft_submission(case_id, case, sections, ao_order_text,
                        available_docs, unavailable_docs, all_evidence,
                        top_args, rag_context, submission_type, style,
                        include_citations, include_circulars, extra_instructions):
-    """Call Gemini and stream the submission draft."""
+    """Call LLM with RAG-grounded citations and stream the submission draft."""
     from datetime import datetime
 
-    # Build context
+    # ── RAG grounded context (same pipeline as Phase 2) ───────────────────────
+    with st.spinner("🔍 Fetching verified precedents..."):
+        ctx = get_grounded_context(case_id, sections)
+
     evidence_block = ""
     if available_docs:
         evidence_block += f"\nDocuments AVAILABLE: {', '.join(available_docs[:15])}"
@@ -399,10 +403,6 @@ def _draft_submission(case_id, case, sections, ao_order_text,
     args_block = ""
     if top_args:
         args_block = "\nLegal arguments identified:\n" + "\n".join(f"- {a}" for a in top_args)
-
-    rag_block = ""
-    if rag_context:
-        rag_block = f"\nRAG-identified strongest arguments:\n{rag_context}"
 
     ao_block = ""
     if ao_order_text and ao_order_text.strip():
@@ -414,10 +414,21 @@ def _draft_submission(case_id, case, sections, ao_order_text,
         "Aggressive (attack AO order)": "Directly challenge the AO's reasoning. Point out factual errors. Challenge legal basis. Demand deletion in strong terms.",
     }.get(style, "")
 
-    citation_note = "Include real ITAT/HC/SC case citations in the format: Party Name vs. Party Name (Court, Year)." if include_citations else "Do not include case citations — leave [CITATION NEEDED] markers."
-    circular_note = "Where relevant, cite applicable CBDT circulars by number." if include_circulars else ""
-
     extra_note = f"\nAdditional instructions: {extra_instructions}" if extra_instructions.strip() else ""
+
+    # ── Build grounded citation block ─────────────────────────────────────────
+    verified_block = ""
+    if include_citations and ctx["citations_block"]:
+        verified_block = f"""
+VERIFIED PRECEDENTS (retrieved from case database — cite ONLY these):
+{ctx['citations_block']}
+
+⚠️ CITATION RULE: Use ONLY the citations listed above. Do not invent or recall any other citation.
+If a citation is not in the list above, write [CITATION NEEDED] instead."""
+
+    cbdt_note = ""
+    if include_circulars and ctx["cbdt_block"]:
+        cbdt_note = f"\nCBDT CIRCULARS TO REFERENCE:\n{ctx['cbdt_block']}"
 
     prompt = f"""Draft {submission_type} for this Income Tax case.
 
@@ -430,19 +441,18 @@ Sections: {', '.join(sections)}
 {ao_block}
 {evidence_block}
 {args_block}
-{rag_block}
+{verified_block}
+{cbdt_note}
 
 DRAFTING INSTRUCTIONS:
 {style_instructions}
-{citation_note}
-{circular_note}
 {extra_note}
 
 FORMAT:
 - Start with: IN THE INCOME TAX APPELLATE TRIBUNAL
 - Include: Case title, AY, Assessee details
 - GROUNDS OF APPEAL numbered 1, 2, 3...
-- Under each ground: facts, legal argument, case law, prayer
+- Under each ground: facts, legal argument, verified case law from above list, prayer
 - End with a PRAYER section seeking specific relief
 - Close with: Respectfully submitted
 
@@ -450,16 +460,12 @@ Draft in full — do not abbreviate or summarize. This is the actual filing docu
 
     draft_key = f"submission_draft_{case_id}"
 
-    placeholder = st.empty()
-    full_text   = ""
-
-    with st.spinner(f"✍️ Drafting {submission_type}..."):
+    with st.spinner(f"✍️ Drafting {submission_type} with {ctx['count']} verified precedents..."):
         full_text = call_gemini(_SUBMISSION_SYSTEM, prompt,
                                 max_tokens=6000, temperature=0.1)
 
     st.session_state[draft_key] = full_text
-    placeholder.empty()
-    st.success("✅ Draft ready — review below")
+    st.success(f"✅ Draft ready — grounded in {ctx['count']} verified precedents")
     st.rerun()
 
 
@@ -588,6 +594,8 @@ def _render_synopsis(case_id, case, sections, evidence, args):
 
     if st.button("📄 Generate Synopsis", type="primary"):
         word_count = "500" if "1 Page" in synopsis_length else "1000"
+        ctx = get_grounded_context(case_id, sections)
+        top3 = f"\nKEY VERIFIED CITATIONS:\n{ctx['top3_block']}" if ctx["top3_block"] else ""
         prompt = f"""Draft a {word_count}-word case synopsis for the ITAT {bench_location} bench.
 
 CASE:
@@ -599,6 +607,7 @@ Sections in dispute: {', '.join(sections)}
 
 DOCUMENTS AVAILABLE: {', '.join(available_docs[:12]) or 'See paper book'}
 KEY ARGUMENTS: {'; '.join(top_args) or 'As per written submissions'}
+{top3}
 
 FORMAT:
 1. STATEMENT OF FACTS (3-4 sentences)
@@ -606,7 +615,7 @@ FORMAT:
 3. GROUNDS OF APPEAL (numbered, 1 line each)
 4. KEY DOCUMENTS IN SUPPORT
 5. RELIEF SOUGHT (specific)
-6. BRIEF ON MERITS (strongest legal argument)
+6. BRIEF ON MERITS — cite from the KEY VERIFIED CITATIONS above only
 
 Keep it precise. This will be handed to the bench at the start of the hearing.
 Use formal language. No verbose introductions."""

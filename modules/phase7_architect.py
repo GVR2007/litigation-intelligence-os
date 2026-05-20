@@ -7,6 +7,7 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from database import queries
 from utils.helpers import parse_sections, format_currency, calculate_overall_win_rate
+from utils.rag_context import get_grounded_context
 from ai.claude_client import call_claude, stream_claude
 from ai.prompts import PLAYBOOK_SYSTEM
 
@@ -66,10 +67,26 @@ def _render_master_playbook(case, sections, evidence, arguments):
         missing_brief = f"Missing: {', '.join(unavailable_evidence[:5])}" if unavailable_evidence else "No critical gaps"
         args_brief = "\n".join(top_arguments) if top_arguments else "Arguments pending"
 
+        # ── RAG grounded context — makes the "zero hallucination" claim real ──
+        with st.spinner("🔍 Loading verified precedents for playbook..."):
+            ctx = get_grounded_context(case_id, sections)
+
+        citations_block = ""
+        if include_citations and ctx["citations_block"]:
+            citations_block = f"""
+## VERIFIED PRECEDENTS (use ONLY these citations — do not invent any other):
+{ctx['citations_block']}
+
+CBDT CIRCULARS:
+{ctx['cbdt_block'] or 'None retrieved'}
+
+⚠️ ZERO HALLUCINATION RULE: Every citation in this playbook MUST appear in the
+VERIFIED PRECEDENTS list above. If a case is not listed, write [CITATION NEEDED]."""
+
         with st.container():
             st.markdown("---")
             st.markdown(f"# MASTER PLAYBOOK")
-            st.markdown(f"**Case:** {case['case_name']} | **Generated:** {datetime.now().strftime('%d %b %Y, %I:%M %p')}")
+            st.markdown(f"**Case:** {case['case_name']} | **Generated:** {datetime.now().strftime('%d %b %Y, %I:%M %p')} | **Precedents loaded:** {ctx['count']}")
             st.markdown("---")
 
             result_placeholder = st.empty()
@@ -90,6 +107,7 @@ def _render_master_playbook(case, sections, evidence, arguments):
 
 **TOP ARGUMENTS:**
 {args_brief}
+{citations_block}
 
 Generate a complete playbook with:
 
@@ -97,17 +115,16 @@ Generate a complete playbook with:
 [Draft all grounds in proper legal format, numbered]
 
 ## 2. ARGUMENT SEQUENCE (Hearing Day Order)
-[Optimal order of arguments with time allocation]
+[Optimal order with time allocation per ground]
 
 ## 3. KEY CASE CITATIONS
-[{'Only verified, real citations' if include_citations else 'Summary only — citations in separate document'}]
-For each: Full citation | Key ratio | How to use it
+[Use ONLY the verified precedents listed above — one per ground with ratio and deployment note]
 
 ## 4. ANTICIPATED BENCH QUESTIONS & ANSWERS
-[Top 8 questions the bench will ask — with prepared answers]
+[Top 8 questions the bench will ask — with prepared answers citing the verified cases]
 
 ## 5. DR ATTACK MATRIX & COUNTERS
-[Each anticipated DR argument → our counter]
+[Each anticipated DR argument → our counter with verified citation]
 
 ## 6. EVIDENCE DEPLOYMENT PLAN
 [When and how to present each document during hearing]
@@ -119,9 +136,7 @@ For each: Full citation | Key ratio | How to use it
 [If primary argument fails: fallback strategy, SLP grounds, etc.]
 
 ## 9. LAST-MINUTE CHECKLIST
-[10 things to verify on the morning of the hearing]
-
-ZERO HALLUCINATION GUARANTEE: All citations must be real and accurate."""
+[10 things to verify on the morning of the hearing]"""
 
             for chunk in stream_claude(PLAYBOOK_SYSTEM, prompt, max_tokens=8000):
                 full_result += chunk
@@ -130,7 +145,7 @@ ZERO HALLUCINATION GUARANTEE: All citations must be real and accurate."""
 
             if full_result and not full_result.startswith("[ERROR]"):
                 st.session_state[f"playbook_{case['id']}"] = full_result
-                st.success("Playbook saved! You can access it in the Quick Reference Card tab.")
+                st.success(f"✅ Playbook saved — grounded in {ctx['count']} verified precedents")
 
 
 def _render_written_submissions(case, sections, evidence, arguments):
@@ -149,19 +164,27 @@ def _render_written_submissions(case, sections, evidence, arguments):
         section_focus = specific_section if specific_section != "All Sections" else ', '.join(sections)
         available_docs = [e["document_name"] for e in evidence if e["status"] == "available"]
 
+        ctx = get_grounded_context(case_id, sections)
+        verified_block = (
+            f"\nVERIFIED CITATIONS (cite ONLY from this list):\n{ctx['citations_block']}\n"
+            f"\n⚠️ Do not use any citation not listed above."
+            if ctx["citations_block"] else ""
+        )
+
         length_instruction = {
             "Full Written Submissions (10-15 pages)": "Provide comprehensive, detailed submissions of 1500+ words.",
             "Synopsis (3-5 pages)": "Provide a concise synopsis of 500-700 words.",
             "Additional Written Arguments (post-hearing)": "Provide targeted post-hearing arguments of 800-1000 words."
         }[submission_type]
 
-        with st.spinner("Drafting written submissions..."):
+        with st.spinner(f"Drafting with {ctx['count']} verified precedents..."):
             prompt = f"""Draft formal Written Submissions for ITAT for sections {section_focus}.
 
 Case: {case['case_name']}
 Client: {case['client_name']}
 Assessment Year: {case.get('assessment_year', 'N/A')}
 Available Evidence: {', '.join(available_docs[:10]) if available_docs else 'As mentioned in paper book'}
+{verified_block}
 
 {length_instruction}
 
@@ -175,18 +198,18 @@ Format as actual legal submissions:
 
 **WRITTEN SUBMISSIONS ON BEHALF OF THE APPELLANT**
 
-[Body with proper legal structure, paragraphs, and citations]
+[Body with proper legal structure, paragraphs, and citations from the verified list above]
 
 **GROUNDS:**
 [Numbered grounds]
 
 **SUBMISSIONS:**
-[Legal arguments with case citations]
+[Legal arguments with verified case citations]
 
 **CONCLUSION:**
 [Prayer for relief]
 
-Use formal legal language. Cite only real cases. Number all paragraphs."""
+Use formal legal language. Number all paragraphs."""
             result = call_claude(PLAYBOOK_SYSTEM, prompt, max_tokens=8000)
             st.markdown(result)
 
@@ -223,12 +246,17 @@ def _render_quick_reference(case, sections, evidence):
 
     if st.button("Generate One-Page Battle Card"):
         win_prob = calculate_overall_win_rate(evidence).get("win_probability", 50) if evidence else 50
+        ctx = get_grounded_context(case_id, sections)
+        top3 = ctx["top3_block"] or "No precedents loaded — run Phase 2 first"
         with st.spinner("Generating battle card..."):
             prompt = f"""Generate a one-page "Battle Card" for ITAT hearing day.
 
 Case: {case['case_name']}
 Sections: {', '.join(sections)}
 Win Probability: {win_prob:.0f}%
+
+TOP 3 VERIFIED CITATIONS TO USE (use these exactly — do not substitute):
+{top3}
 
 Format as a compact, scannable reference:
 
@@ -237,15 +265,15 @@ Format as a compact, scannable reference:
 2. [Second strongest]
 3. [Third]
 
-**3 CASES TO CITE FIRST:**
-1. [Citation] — [One-line ratio]
-2. [Citation] — [One-line ratio]
-3. [Citation] — [One-line ratio]
+**3 CASES TO CITE FIRST** (from the verified citations above):
+1. [Citation from above] — [Ratio]
+2. [Citation from above] — [Ratio]
+3. [Citation from above] — [Ratio]
 
-**IF BENCH ASKS ABOUT [Section]:** [One sentence response]
+**IF BENCH ASKS ABOUT [Section]:** [One sentence response with citation]
 
 **DR WILL SAY:** [Expected attack]
-**WE SAY:** [Counter in one sentence]
+**WE SAY:** [Counter in one sentence with citation]
 
 **PRAYER:** [What exactly to ask for]
 

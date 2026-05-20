@@ -11,6 +11,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from database import queries
 from utils.helpers import parse_sections, format_currency
+from utils.rag_context import get_grounded_context
 from ai.openrouter_client import call_openrouter as call_gemini
 
 _STRATEGY_SYSTEM = """You are a senior Indian Income Tax advocate with 25 years of ITAT
@@ -92,10 +93,19 @@ def _render_dr_simulation(case_id, case, sections, evidence):
             f"Documents we HAVE: {', '.join(available_docs[:10]) or 'None'}\n"
             f"Documents MISSING: {', '.join(unavailable_docs[:8]) or 'None'}"
         )
-        rag_note = ""
-        if counter_args:
-            rag_note = f"\nRevenue's known strong arguments (from case law):\n" + \
-                       "\n".join(f"- {a}" for a in counter_args)
+
+        # ── RAG: split into revenue-won (DR's ammunition) vs assessee-won (ours) ──
+        with st.spinner("🔍 Loading precedents for DR simulation..."):
+            ctx = get_grounded_context(case_id, sections)
+
+        dr_citations = (
+            f"\nCASES REVENUE HAS WON ON SIMILAR FACTS (DR will cite these):\n{ctx['revenue_block']}"
+            if ctx["revenue_block"] else ""
+        )
+        our_citations = (
+            f"\nCASES ASSESSEE HAS WON (we will counter with these):\n{ctx['assessee_block']}"
+            if ctx["assessee_block"] else ""
+        )
 
         prompt = f"""Simulate the Departmental Representative in an ITAT hearing.
 
@@ -106,11 +116,12 @@ Demand: {format_currency(case.get('demand_amount') or 0)}
 {evidence_status}
 DR Aggression: {aggression}/10
 Bench: {bench_type}
-{rag_note}
+{dr_citations}
+{our_citations}
 
 Play the role of a skilled, {aggression}/10 aggressive DR. Present:
 
-**PART 1 — REVENUE'S OPENING ARGUMENTS** (5 strongest, each with specific legal basis + citations)
+**PART 1 — REVENUE'S OPENING ARGUMENTS** (5 strongest, each with specific legal basis + cite from the revenue cases above)
 
 **PART 2 — ATTACK ON MISSING DOCUMENTS**
 For each missing document, state exactly how the DR will exploit the gap.
@@ -127,14 +138,15 @@ The single most dangerous argument — why it could sink the case if not answere
 **PART 6 — VULNERABILITY SCORE**
 Rate each weakness: Critical / Serious / Minor
 
-Be brutal. The point is to expose every gap."""
+**PART 7 — ASSESSEE'S COUNTER**
+For each DR argument, the one-line counter using the assessee-won cases listed above.
+
+Be brutal. The point is to expose every gap before the actual hearing."""
 
         dr_key = f"dr_sim_{case_id}"
-        placeholder = st.empty()
-        full = ""
         with st.spinner("Simulating Revenue attack..."):
             full = call_gemini(_STRATEGY_SYSTEM, prompt, max_tokens=5000)
-        placeholder.markdown(full)
+        st.markdown(full)
         st.session_state[dr_key] = full
 
     # Counter-strategy from simulation
@@ -212,6 +224,12 @@ def _render_hearing_chits(case_id, case, sections, evidence, args):
             "Full day": "Full argument with detailed case law and response to counter-arguments.",
         }.get(hearing_duration, "")
 
+        ctx = get_grounded_context(case_id, sections)
+        citations_note = (
+            f"\nVERIFIED CITATIONS TO USE IN CHITS (cite ONLY from this list):\n{ctx['assessee_block']}"
+            if ctx["assessee_block"] else ""
+        )
+
         prompt = f"""Generate ITAT argument chits for this case.
 
 CASE: {case.get('case_name','—')}
@@ -219,7 +237,7 @@ SECTIONS: {', '.join(sections)}
 AY: {case.get('assessment_year','—')}
 DEMAND: {format_currency(case.get('demand_amount') or 0)}
 DOCUMENTS AVAILABLE: {', '.join(available_docs[:12]) or 'As per paper book'}
-{rag_args_block}
+{citations_note}
 TIME NOTE: {time_note}
 
 Generate one chit per section/ground in this EXACT format:
@@ -302,6 +320,11 @@ def _render_bench_questions(case_id, case, sections, evidence):
 
     if st.button("❓ Generate Expected Questions", type="primary"):
         focus = ", ".join(question_types) if question_types else "all types"
+        ctx = get_grounded_context(case_id, sections)
+        prec_note = (
+            f"\nPRECEDENTS IN PLAY (bench will likely probe these):\n{ctx['citations_block']}"
+            if ctx["citations_block"] else ""
+        )
         prompt = f"""Predict the questions the ITAT {bench_location} bench will ask in this case.
 
 CASE:
@@ -311,6 +334,7 @@ Demand: {format_currency(case.get('demand_amount') or 0)}
 Documents we have: {', '.join(available_docs[:10]) or 'See paper book'}
 Documents missing: {', '.join(unavailable_docs[:5]) or 'None'}
 Focus: {focus}
+{prec_note}
 
 Generate 10-15 questions the bench is LIKELY to ask, with prepared answers.
 
@@ -391,15 +415,22 @@ def _render_defence_builder(case_id, sections):
 
     if st.button("⚒️ Build Defence", type="primary",
                   disabled=not (section_to_argue and case_facts)):
-        rag_strategy = st.session_state.get(f"rag_strategy_{case_id}")
-        rag_block = ""
-        if rag_strategy:
-            rag_args = [a for a in getattr(rag_strategy, "arguments", [])
-                        if a.section == section_to_argue]
-            if rag_args:
-                rag_block = "\nRAG-identified arguments for this section:\n" + "\n".join(
-                    f"- {a.argument} (win rate {a.win_rate:.0%})" for a in rag_args[:3]
-                )
+        # ── Section-specific verified citations ───────────────────────────────
+        ctx = get_grounded_context(case_id, sections)
+        sec_cases = [
+            c for c in ctx["cases"]
+            if getattr(c, "section", "") == section_to_argue
+            and getattr(c, "win_for_assessee", True) is not False
+        ]
+        # Fall back to all assessee cases if no section-specific ones
+        grounded_cases = sec_cases or [
+            c for c in ctx["cases"] if getattr(c, "win_for_assessee", True) is not False
+        ]
+        from utils.rag_context import _fmt_block
+        rag_block = (
+            f"\nVERIFIED CITATIONS FOR §{section_to_argue} (cite ONLY from this list):\n"
+            + _fmt_block(grounded_cases[:6])
+        ) if grounded_cases else ""
 
         prompt = f"""Build comprehensive legal defence for Section {section_to_argue}.
 
