@@ -157,24 +157,67 @@ def _fmt_inline(cases: list) -> str:
     )
 
 
-# ── CBDT circulars ────────────────────────────────────────────────────────────
+# ── CBDT circulars — direct SQL, no ChromaDB ─────────────────────────────────
 
 def _get_cbdt(sections: list[str], query: str) -> str:
+    """
+    Query cbdt_circulars table directly via SQLite — no EmbeddingService,
+    no HybridRetriever, no ChromaDB init required.
+    Scores by section overlap + keyword hits.
+    """
     try:
-        from ai.rag.retriever import HybridRetriever
-        from ai.rag.embedder  import EmbeddingService
-        from ai.rag.fts       import FTSIndex
+        import sqlite3, json
+        import config
 
-        retriever = HybridRetriever(EmbeddingService(), FTSIndex())
-        circulars = retriever.retrieve_cbdt(
-            query or " ".join(sections), sections, top_k=5
-        )
-        if not circulars:
+        conn = sqlite3.connect(config.DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cur  = conn.cursor()
+        cur.execute("SELECT id, type, number, subject, summary, key_para, favour, sections FROM cbdt_circulars")
+        rows = cur.fetchall()
+        conn.close()
+
+        if not rows:
             return ""
-        return "\n".join(
-            f"• {getattr(c,'citation','')} — {(getattr(c,'key_ratio','') or '')[:150]}"
-            for c in circulars
-        )
+
+        query_words = set((query or "").lower().split())
+        sec_set     = {s.lower() for s in sections}
+
+        scored = []
+        for r in rows:
+            score = 0
+            try:
+                circ_secs = json.loads(r["sections"] or "[]")
+            except Exception:
+                circ_secs = []
+
+            # Section overlap
+            for cs in circ_secs:
+                if str(cs).lower() in sec_set:
+                    score += 3
+
+            # Keyword overlap in subject + key_para
+            text = f"{r['subject']} {r['key_para']}".lower()
+            score += sum(1 for w in query_words if len(w) > 3 and w in text)
+
+            if score > 0:
+                scored.append((score, r))
+
+        scored.sort(key=lambda x: -x[0])
+        top = scored[:5]
+
+        if not top:
+            # Fallback: return first 3 regardless of score
+            top = [(0, r) for r in rows[:3]]
+
+        lines = []
+        for _, r in top:
+            favour = {"assessee": "✅", "revenue": "❌"}.get(r["favour"] or "", "⚖️")
+            lines.append(
+                f"{favour} Circular {r['number']} ({r['type']}) — {r['subject'][:80]}\n"
+                f"   Key para: {(r['key_para'] or '')[:150]}"
+            )
+        return "\n\n".join(lines)
+
     except Exception:
         return ""
 
