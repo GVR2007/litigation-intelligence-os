@@ -84,15 +84,15 @@ def call_gemini(system_prompt: str,
         except Exception:
             pass
 
-    url = f"{GEMINI_BASE}/{_model()}:generateContent?key={key}"
+    # Try primary model first, fall back to gemini-2.0-flash on overload
+    _FALLBACK_MODEL = "gemini-2.0-flash"
+    models_to_try   = [_model(), _FALLBACK_MODEL]
+    if models_to_try[0] == models_to_try[1]:
+        models_to_try = [_model()]
 
     payload = {
-        "system_instruction": {
-            "parts": [{"text": system_prompt}]
-        },
-        "contents": [
-            {"role": "user", "parts": [{"text": clean_message}]}
-        ],
+        "system_instruction": {"parts": [{"text": system_prompt}]},
+        "contents":           [{"role": "user", "parts": [{"text": clean_message}]}],
         "generationConfig": {
             "temperature":     temperature,
             "maxOutputTokens": max_tokens,
@@ -100,21 +100,46 @@ def call_gemini(system_prompt: str,
         },
     }
 
-    try:
-        resp = _req.post(url, json=payload, timeout=120)
-        resp.raise_for_status()
-        data = resp.json()
-        return _extract_text(data)
-    except _req.exceptions.Timeout:
-        return "[ERROR] Gemini timed out. Try again — thinking models can be slow for complex prompts."
-    except _req.exceptions.HTTPError as e:
-        try:
-            err_msg = resp.json().get("error", {}).get("message", str(e))
-        except Exception:
-            err_msg = str(e)
-        return f"[ERROR] Gemini API: {err_msg}"
-    except Exception as e:
-        return f"[ERROR] Gemini: {str(e)}"
+    import time
+    last_err = ""
+    for model_id in models_to_try:
+        url = f"{GEMINI_BASE}/{model_id}:generateContent?key={key}"
+        for attempt in range(1, 4):          # up to 3 retries per model
+            try:
+                resp = _req.post(url, json=payload, timeout=180)
+                if resp.status_code == 503 or (
+                    resp.status_code == 429 and
+                    "high demand" in resp.text.lower()
+                ):
+                    # Temporary overload — wait and retry
+                    wait = 8 * attempt
+                    time.sleep(wait)
+                    last_err = f"overloaded (model={model_id})"
+                    continue
+                if resp.status_code == 429:
+                    # Hard quota — no point retrying same model
+                    last_err = "quota exceeded"
+                    break
+                resp.raise_for_status()
+                data = resp.json()
+                return _extract_text(data)
+            except _req.exceptions.Timeout:
+                last_err = "timeout"
+                time.sleep(5)
+            except _req.exceptions.HTTPError as e:
+                try:
+                    last_err = resp.json().get("error", {}).get("message", str(e))
+                except Exception:
+                    last_err = str(e)
+                break                        # non-retryable HTTP error
+            except Exception as e:
+                last_err = str(e)
+                break
+
+    return (
+        f"[ERROR] Gemini unavailable after retries: {last_err}. "
+        "Please wait a minute and try again, or top up Google AI Studio credits."
+    )
 
 
 def _extract_text(data: dict) -> str:

@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from database import queries
 from utils.helpers import parse_sections, format_currency
 from utils.rag_context import get_grounded_context
-from ai.openrouter_client import call_openrouter as call_gemini
+from ai.gemini_client import call_gemini
 
 
 _SUBMISSION_SYSTEM = """You are a senior Indian Income Tax advocate with 25 years of ITAT
@@ -297,21 +297,22 @@ def _render_submission_drafter(case_id, case, sections, evidence, args):
                                disabled=not sections)
 
     if draft_btn:
-        _draft_submission(
-            case_id, case, sections, ao_order_text,
-            available_docs, unavailable_docs, all_evidence,
-            top_args, rag_context, submission_type, style,
-            include_citations, include_circulars, extra_instructions,
-        )
+        try:
+            _draft_submission(
+                case_id, case, sections, ao_order_text,
+                available_docs, unavailable_docs, all_evidence,
+                top_args, rag_context, submission_type, style,
+                include_citations, include_circulars, extra_instructions,
+            )
+        except Exception as exc:
+            st.error(f"❌ Unexpected error in drafting: {exc}")
+            import traceback
+            st.code(traceback.format_exc())
 
     # ── Saved draft display ───────────────────────────────────────────────────
     draft_key = f"submission_draft_{case_id}"
 
-    # Auto-clear stale error drafts so they don't block the UI
     cached = st.session_state.get(draft_key, "")
-    if cached and str(cached).startswith("[ERROR]"):
-        del st.session_state[draft_key]
-        cached = ""
 
     if cached:
         st.divider()
@@ -520,9 +521,18 @@ Do NOT skip any query. Draft the complete document now."""
     draft_key = f"submission_draft_{case_id}"
     label = f"{len(all_queries)} queries" if all_queries else submission_type
 
-    with st.spinner(f"✍️ Drafting response to {label}..."):
-        full_text = call_gemini(_SUBMISSION_SYSTEM, prompt,
-                                max_tokens=6000, temperature=0.1)
+    try:
+        with st.spinner(f"✍️ Drafting response to {label}..."):
+            full_text = call_gemini(_SUBMISSION_SYSTEM, prompt,
+                                    max_tokens=6000, temperature=0.1)
+    except Exception as exc:
+        st.error(f"❌ Drafting failed (exception): {exc}")
+        return
+
+    if not full_text or str(full_text).startswith("[ERROR]"):
+        st.error(f"❌ AI call failed: {full_text or 'empty response'}")
+        st.info("Check: Is OPENROUTER_API_KEY set in config? Is the network reachable?")
+        return
 
     st.session_state[draft_key] = full_text
     st.success("✅ Draft ready")

@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from database import queries
 from utils.helpers import parse_sections, format_currency
 from utils.rag_context import get_grounded_context
-from ai.openrouter_client import call_openrouter as call_gemini
+from ai.gemini_client import call_gemini
 
 _STRATEGY_SYSTEM = """You are a senior Indian Income Tax advocate with 25 years of ITAT
 and High Court experience. You prepare litigation strategy, simulate the Departmental
