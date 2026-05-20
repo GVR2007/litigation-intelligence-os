@@ -69,7 +69,7 @@ def _render_master_playbook(case, sections, evidence, arguments):
 
         # ── RAG grounded context — makes the "zero hallucination" claim real ──
         with st.spinner("🔍 Loading verified precedents for playbook..."):
-            ctx = get_grounded_context(case_id, sections)
+            ctx = get_grounded_context(case["id"], sections)
 
         citations_block = ""
         if include_citations and ctx["citations_block"]:
@@ -164,7 +164,7 @@ def _render_written_submissions(case, sections, evidence, arguments):
         section_focus = specific_section if specific_section != "All Sections" else ', '.join(sections)
         available_docs = [e["document_name"] for e in evidence if e["status"] == "available"]
 
-        ctx = get_grounded_context(case_id, sections)
+        ctx = get_grounded_context(case["id"], sections)
         verified_block = (
             f"\nVERIFIED CITATIONS (cite ONLY from this list):\n{ctx['citations_block']}\n"
             f"\n⚠️ Do not use any citation not listed above."
@@ -246,7 +246,7 @@ def _render_quick_reference(case, sections, evidence):
 
     if st.button("Generate One-Page Battle Card"):
         win_prob = calculate_overall_win_rate(evidence).get("win_probability", 50) if evidence else 50
-        ctx = get_grounded_context(case_id, sections)
+        ctx = get_grounded_context(case["id"], sections)
         top3 = ctx["top3_block"] or "No precedents loaded — run Phase 2 first"
         with st.spinner("Generating battle card..."):
             prompt = f"""Generate a one-page "Battle Card" for ITAT hearing day.
