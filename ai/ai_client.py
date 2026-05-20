@@ -2,11 +2,13 @@
 Central AI client — single entry point for all LLM calls.
 
 Tiers:
-  FAST    → google/gemini-2.0-flash-001   synthesis, reranking, quick tasks
-  QUALITY → anthropic/claude-3-haiku-20240307  complex drafts, long reasoning
-  JSON    → google/gemini-2.0-flash-001   same as FAST, caller expects JSON back
+  FAST    → openrouter/auto   OpenRouter picks best available model automatically
+  QUALITY → openrouter/auto   same — OpenRouter handles provider routing
 
-Switching model = change one constant here. No other file needs to change.
+Only one API key needed: OPENROUTER_API_KEY.
+OpenRouter handles model selection, provider failover, and load balancing.
+
+Switching model = change FAST/QUALITY constants here. No other file changes.
 All synthesis code should call AIClient.call() / AIClient.call_json().
 """
 
@@ -21,8 +23,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 class AIClient:
 
-    FAST    = "google/gemini-2.0-flash-001"
-    QUALITY = "anthropic/claude-3-haiku-20240307"
+    FAST    = "openrouter/auto"
+    QUALITY = "openrouter/auto"
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
