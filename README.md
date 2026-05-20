@@ -5,7 +5,7 @@
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue)](https://www.python.org/)
 [![Streamlit](https://img.shields.io/badge/UI-Streamlit-FF4B4B)](https://streamlit.io/)
 [![Tests](https://img.shields.io/badge/Tests-43%20passing-brightgreen)](#testing)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![License: Proprietary](https://img.shields.io/badge/License-Proprietary-red.svg)](LICENSE)
 
 ---
 
@@ -356,7 +356,12 @@ Pull requests welcome. Please:
 
 ## License
 
-MIT License — see [LICENSE](LICENSE) for details.
+**Proprietary — All Rights Reserved.**
+
+This software is the exclusive intellectual property of the owner. Viewing this
+repository does **not** grant any right to use, copy, modify, or distribute the
+code. See [LICENSE](LICENSE) for full terms. Unauthorised use will be prosecuted
+under the Indian Copyright Act, 1957 and the IT Act, 2000.
 
 ---
 
