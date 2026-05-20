@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from database import queries
 from utils.helpers import parse_sections, format_currency
 from utils.rag_context import get_grounded_context
-from ai.gemini_client import call_gemini
+from ai.openrouter_client import call_openrouter as call_gemini
 
 
 _SUBMISSION_SYSTEM = """You are a senior Indian Income Tax advocate with 25 years of ITAT

@@ -1,13 +1,14 @@
 """
-OpenRouter LLM client — drop-in replacement for call_gemini in synthesis pipeline.
+OpenRouter LLM client — free-tier models, no credits required.
 
-Uses OpenRouter chat completions API (OpenAI-compatible endpoint).
-Model: openrouter/auto — OpenRouter picks the best available model automatically.
-No hardcoded model names. No provider lock-in. No daily quota.
+Free model chain (tried in order until one succeeds):
+  1. nvidia/nemotron-3-super-120b-a12b:free  — 120B, best quality
+  2. google/gemma-4-31b-it:free             — 31B, fast fallback
+  3. meta-llama/llama-3.3-70b-instruct:free — 70B, reliable fallback
 
 Retry strategy:
-  - 429 / 502 / 503 / 504 / 524 → transient, retried with exponential backoff
-  - Network exceptions → retried with backoff
+  - 429 provider overload → try next model in chain
+  - 502 / 503 / 504 / 524 → retry same model with backoff
 """
 
 from __future__ import annotations
@@ -18,13 +19,20 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import config
 
-_BASE_URL      = "https://openrouter.ai/api/v1/chat/completions"
-_DEFAULT_MODEL = "openrouter/auto"   # OpenRouter picks the best model automatically
-_MAX_RETRIES   = 4
-_RETRY_BASE    = 2   # exponential backoff: 2, 4, 8, 16 seconds
+_BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-# HTTP status codes that are transient and worth retrying
-_RETRYABLE = {429, 502, 503, 504, 524}
+# Free models tried in order — all work with a free-tier key
+# openrouter/free = OpenRouter picks best available free model automatically
+_FREE_MODELS = [
+    "openrouter/free",
+    "nvidia/nemotron-3-super-120b-a12b:free",
+    "google/gemma-4-31b-it:free",
+    "meta-llama/llama-3.3-70b-instruct:free",
+]
+
+_DEFAULT_MODEL = _FREE_MODELS[0]
+_MAX_RETRIES   = 3
+_RETRYABLE     = {502, 503, 504, 524}
 
 
 def _or_key() -> str:
@@ -40,22 +48,13 @@ def call_openrouter(
     redact:        bool  = True,
 ) -> str:
     """
-    Call OpenRouter chat completions API.
+    Call OpenRouter using free models. Walks _FREE_MODELS chain on 429.
 
-    Args:
-        system_prompt — role=system content
-        user_message  — role=user content
-        model         — OpenRouter model ID (default: openrouter/auto)
-        temperature   — 0.0–1.0
-        max_tokens    — max output tokens
-        redact        — unused (kept for compatibility)
-
-    Returns:
-        str — model output text, or "[ERROR] ..." on failure
+    Returns str response, or "[ERROR] ..." on failure.
     """
     api_key = _or_key()
     if not api_key:
-        return "[ERROR] OPENROUTER_API_KEY not set"
+        return "[ERROR] OPENROUTER_API_KEY not set in config"
 
     import requests
 
@@ -65,42 +64,57 @@ def call_openrouter(
         "HTTP-Referer":  "https://litigation-os.local",
         "X-Title":       "Litigation OS",
     }
-    payload = {
-        "model":       model,
-        "temperature": temperature,
-        "max_tokens":  max_tokens,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user",   "content": user_message},
-        ],
-    }
+
+    # Build model list: requested model first, then rest of free chain
+    model_chain = [model] + [m for m in _FREE_MODELS if m != model]
 
     last_error = ""
-    for attempt in range(1, _MAX_RETRIES + 1):
-        try:
-            resp = requests.post(_BASE_URL, headers=headers,
-                                 json=payload, timeout=120)
+    for current_model in model_chain:
+        payload = {
+            "model":       current_model,
+            "temperature": temperature,
+            "max_tokens":  max_tokens,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user",   "content": user_message},
+            ],
+        }
 
-            if resp.status_code in _RETRYABLE:
-                last_error = f"HTTP {resp.status_code}"
+        for attempt in range(1, _MAX_RETRIES + 1):
+            try:
+                resp = requests.post(_BASE_URL, headers=headers,
+                                     json=payload, timeout=180)
+
+                if resp.status_code == 429:
+                    # Provider overloaded — try next model
+                    last_error = f"{current_model} rate-limited (429)"
+                    break
+
+                if resp.status_code in _RETRYABLE:
+                    last_error = f"HTTP {resp.status_code}"
+                    if attempt < _MAX_RETRIES:
+                        time.sleep(5 * attempt)
+                    continue
+
+                if resp.status_code != 200:
+                    last_error = f"HTTP {resp.status_code}: {resp.text[:200]}"
+                    break
+
+                data    = resp.json()
+                choices = data.get("choices", [])
+                if not choices:
+                    last_error = "empty choices"
+                    break
+
+                content = choices[0].get("message", {}).get("content", "")
+                if content:
+                    return content
+                last_error = "empty content"
+                break
+
+            except Exception as e:
+                last_error = str(e)
                 if attempt < _MAX_RETRIES:
-                    time.sleep(_RETRY_BASE ** attempt)
-                continue
+                    time.sleep(5)
 
-            if resp.status_code != 200:
-                return f"[ERROR] OpenRouter HTTP {resp.status_code}: {resp.text[:300]}"
-
-            data     = resp.json()
-            choices  = data.get("choices", [])
-            if not choices:
-                return "[ERROR] OpenRouter returned empty choices"
-
-            content = choices[0].get("message", {}).get("content", "")
-            return content if content else "[ERROR] OpenRouter returned empty content"
-
-        except Exception as e:
-            last_error = str(e)
-            if attempt < _MAX_RETRIES:
-                time.sleep(_RETRY_BASE ** attempt)
-
-    return f"[ERROR] OpenRouter failed after {_MAX_RETRIES} attempts: {last_error}"
+    return f"[ERROR] All models unavailable: {last_error}"

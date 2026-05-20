@@ -41,8 +41,8 @@ class AIClient:
         Make a single LLM call. Returns raw string response.
         On error returns "[ERROR] ..." string — callers must check.
         """
-        from ai.gemini_client import call_gemini
-        return call_gemini(
+        from ai.openrouter_client import call_openrouter
+        return call_openrouter(
             system_prompt = system,
             user_message  = user,
             temperature   = temperature,
