@@ -37,19 +37,25 @@ def render():
     if uploaded_pdf is not None:
         last_filename = st.session_state.get("pdf_last_filename")
         if last_filename != uploaded_pdf.name:
+
+            # ── Lock immediately — prevents re-scan on any Streamlit rerun ────
+            st.session_state["pdf_last_filename"] = uploaded_pdf.name
+            st.session_state.pop(scan_key,   None)
+            st.session_state.pop(report_key, None)
+
             os.makedirs(UPLOADS_DIR, exist_ok=True)
             pdf_path = os.path.join(UPLOADS_DIR, uploaded_pdf.name)
             with open(pdf_path, "wb") as f:
                 f.write(uploaded_pdf.getbuffer())
+            st.session_state["pdf_path"] = pdf_path
 
-            with st.spinner(f"📄 Scanning {uploaded_pdf.name}..."):
-                parsed = parse_assessment_order(pdf_path)
-
-            st.session_state[scan_key]             = parsed
-            st.session_state["pdf_last_filename"]  = uploaded_pdf.name
-            st.session_state["pdf_path"]           = pdf_path
-            # Clear old report so it regenerates for new file
-            st.session_state.pop(report_key, None)
+            try:
+                with st.spinner(f"📄 Scanning {uploaded_pdf.name}..."):
+                    parsed = parse_assessment_order(pdf_path)
+                st.session_state[scan_key] = parsed
+            except Exception as exc:
+                st.error(f"❌ PDF scan error: {exc}")
+                st.session_state.pop("pdf_last_filename", None)  # allow retry
 
     scan = st.session_state.get(scan_key)
 
@@ -142,6 +148,14 @@ def _render_intelligence_tab(scan: dict, sections: list, pdf_text: str, report_k
 
     existing_report = st.session_state.get(report_key)
 
+    # Error sentinel — show button to retry, don't auto-loop
+    if isinstance(existing_report, dict) and existing_report.get("_error"):
+        st.error(f"❌ Report failed: {existing_report.get('_msg', 'Unknown error')}")
+        if st.button("🔄 Retry Report", key="retry_report"):
+            st.session_state.pop(report_key, None)
+            st.rerun()
+        return
+
     if existing_report:
         # Already generated — show cached
         render_report(existing_report)
@@ -161,7 +175,7 @@ def _render_intelligence_tab(scan: dict, sections: list, pdf_text: str, report_k
         _manual_report_trigger(scan, sections, pdf_text, report_key)
         return
 
-    # Auto-trigger: show a spinner and run the pipeline
+    # Auto-trigger once — run the pipeline
     st.info("🤖 Analysing case and finding similar judgments — please wait...")
     _run_report_pipeline(scan, sections, pdf_text, report_key)
 
@@ -205,7 +219,10 @@ def _run_report_pipeline(scan: dict, sections: list, pdf_text: str, report_key: 
             st.rerun()
         except Exception as e:
             log_box.empty()
-            st.error(f"Report generation failed: {e}")
+            # Save error sentinel — prevents the tab from re-triggering on every render
+            st.session_state[report_key] = {"_error": True, "_msg": str(e)}
+            st.error(f"❌ Report generation failed: {e}")
+            st.info("Click **Retry Report** to try again.")
 
 
 # ── PII Redaction Status ──────────────────────────────────────────────────────
