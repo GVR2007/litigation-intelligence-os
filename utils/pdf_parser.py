@@ -81,7 +81,7 @@ def _ocr_with_openrouter(pdf_path: str) -> str:
             img_b64 = base64.b64encode(pix.tobytes("png")).decode()
 
             payload = {
-                "model": "google/gemini-2.0-flash-001",
+                "model": "nvidia/nemotron-nano-12b-v2-vl:free",  # free vision model
                 "messages": [
                     {"role": "system", "content": _OCR_SYSTEM},
                     {

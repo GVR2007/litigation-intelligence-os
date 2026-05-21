@@ -23,8 +23,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 class AIClient:
 
-    FAST    = "openrouter/auto"
-    QUALITY = "openrouter/auto"
+    FAST    = "openrouter/free"
+    QUALITY = "openrouter/free"
 
     # ── Public API ─────────────────────────────────────────────────────────────
 

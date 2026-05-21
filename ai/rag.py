@@ -226,7 +226,7 @@ def call_with_routing(task_type: str,
     All task types — simple and complex — go to Gemini 2.5 Flash.
     RAG context (verified citations) is injected when sections are provided.
     """
-    from ai.gemini_client import call_gemini, is_available
+    from ai.openrouter_client import call_openrouter
 
     # Inject RAG if sections provided
     if sections:
@@ -234,13 +234,7 @@ def call_with_routing(task_type: str,
     else:
         grounded = user_message
 
-    if not is_available():
-        return (
-            "[ERROR] Gemini API key not set.\n\n"
-            "Go to **⚙️ Settings** → paste your Gemini API key."
-        )
-
-    return call_gemini(
+    return call_openrouter(
         system_prompt, grounded,
         temperature=temperature,
         max_tokens=max_tokens,
